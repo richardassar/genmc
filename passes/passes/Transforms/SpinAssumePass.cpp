@@ -370,7 +370,7 @@ static auto isPathToHeaderEffectFree(BasicBlock *latch, Loop *l, ModuleAnalysisM
 	auto effects = false;
 	std::vector<AtomicCmpXchgInst *> cass;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInBackBlocksTo(latch, l->getHeader(), [&](Instruction &i) {
 		/* Try to prove that failed CASes imply another iteration */
 		if (auto *casi = dyn_cast<AtomicCmpXchgInst>(&i)) {
 			cass.push_back(casi);
@@ -462,7 +462,7 @@ static auto isPathToHeaderFAIZNE(BasicBlock *latch, Loop *l, ModuleAnalysisManag
 	VSet<AtomicCmpXchgInst *> cass;
 	VSet<AtomicRMWInst *> fais;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInBackBlocksTo(latch, l->getHeader(), [&](Instruction &i) {
 		if (auto *faii = dyn_cast<AtomicRMWInst>(&i)) {
 			fais.insert(faii);
 			return;
@@ -520,7 +520,7 @@ static auto isPathToHeaderLockZNE(BasicBlock *latch, Loop *l, ModuleAnalysisMana
 	VSet<CallInst *> unlocks;
 	VSet<PHINode *> phis;
 
-	foreachInBackPathTo(latch, l->getHeader(), [&](Instruction &i) {
+	foreachInBackBlocksTo(latch, l->getHeader(), [&](Instruction &i) {
 		if (auto *ci = dyn_cast<CallInst>(&i)) {
 			auto name = getCalledFunOrStripValName(*ci);
 			if (isInternalFunction(name)) {

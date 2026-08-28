@@ -14,6 +14,9 @@
 #ifndef GENMC_LLVM_UTILS_HPP
 #define GENMC_LLVM_UTILS_HPP
 
+#include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/CFG.h>
 #include "genmc/ADT/VSet.hpp"
 #include "genmc/Execution/EventAttr.hpp"
 #include "passes/InternalFunctions.hpp"
@@ -216,6 +219,32 @@ void foreachInBackPathTo(llvm::BasicBlock *from, llvm::BasicBlock *to, F &&fun)
 {
 	llvm::SmallVector<llvm::BasicBlock *, 4> path;
 	::details::foreachInBackPathTo(from, to, path, fun);
+}
+
+/**
+ * Executes FUN once for every instruction of every block that lies on SOME path from FROM back
+ * to TO (TO included), in reverse iteration order within a block. The set of such blocks is
+ * what a path enumeration visits, minus the repetition: a caller whose FUN only accumulates
+ * sets or flags gets the same result, and the walk is linear in the blocks rather than
+ * exponential in the paths. A caller whose FUN carries per-path state uses foreachInBackPathTo.
+ */
+template <typename F>
+void foreachInBackBlocksTo(llvm::BasicBlock *from, llvm::BasicBlock *to, F &&fun)
+{
+	llvm::SmallPtrSet<llvm::BasicBlock *, 32> visited;
+	llvm::SmallVector<llvm::BasicBlock *, 32> work;
+	work.push_back(from);
+	while (!work.empty()) {
+		auto *bb = work.pop_back_val();
+		if (!visited.insert(bb).second)
+			continue;
+		std::for_each(bb->rbegin(), bb->rend(), fun);
+		if (bb == to)
+			continue;
+		for (auto *pred : llvm::predecessors(bb))
+			if (!visited.count(pred))
+				work.push_back(pred);
+	}
 }
 
 /*
