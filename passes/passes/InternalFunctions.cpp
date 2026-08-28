@@ -21,5 +21,7 @@ const std::unordered_map<std::string, InternalFunctions> internalFunNames = {
 
 	/* Some extra C++ calls */
 	{"_Znwm", InternalFunctions::Malloc},
+	{"_Znam", InternalFunctions::Malloc},
 	{"_ZdlPv", InternalFunctions::Free},
+	{"_ZdaPv", InternalFunctions::Free},
 };

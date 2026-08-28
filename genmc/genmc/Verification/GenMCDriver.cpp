@@ -911,7 +911,16 @@ auto GenMCDriver::checkLiveness() -> std::optional<VerificationError>
 	/* Collect all threads blocked at spinloops */
 	std::vector<int> spinBlocked;
 	for (auto i = 0; i < g.getNumThreads(); i++) {
-		if (genmc::isa<SpinloopBlockLabel>(g.getLastThreadLabel(i)))
+		/* An execution in which some thread is blocked for a reason other than a spinloop
+		 * (an assume(false), a helped CAS, a confirmation) is being pruned from the search
+		 * space: the store a spinning thread waits for may be one the blocked thread would
+		 * have issued had the execution continued, so a liveness violation reported here is
+		 * a false positive. (Upstream PR #58.) */
+		const auto *last = g.getLastThreadLabel(i);
+		if (genmc::isa<UserBlockLabel>(last) || genmc::isa<HelpedCASBlockLabel>(last) ||
+		    genmc::isa<ConfirmationBlockLabel>(last))
+			return {};
+		if (genmc::isa<SpinloopBlockLabel>(last))
 			spinBlocked.push_back(i);
 	}
 
