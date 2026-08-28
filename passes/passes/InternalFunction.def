@@ -179,7 +179,8 @@ HANDLE_OTHER_FUNCTION(39, "__VERIFIER_thread_create_symmetric", ThreadCreateSymm
 HANDLE_OTHER_FUNCTION(40, "__VERIFIER_thread_join", ThreadJoin)
 HANDLE_OTHER_FUNCTION(41, "__VERIFIER_thread_exit", ThreadExit)
 HANDLE_OTHER_FUNCTION(42, "__VERIFIER_atexit", AtExit)
-LAST_OTHER_FUNCTION(42)
+HANDLE_OTHER_FUNCTION(43, "__cxa_thread_atexit", ThreadAtExit)
+LAST_OTHER_FUNCTION(43)
 
 #undef FIRST_PURE_FUNCTION
 #undef HANDLE_PURE_FUNCTION
