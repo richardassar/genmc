@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <chrono>
 #include "LLVMModule.hpp"
+#include "genmc/Support/HgProgress.hpp"
 #include "passes/LLIConfig.hpp"
 #include "passes/Transforms/BarrierResultCheckerPass.hpp"
 #include "passes/Transforms/BisimilarityCheckerPass.hpp"
@@ -231,9 +232,22 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		return n;
 	};
 	if (hgProgress) {
+		hgprog::start();
 		pic.registerBeforeNonSkippedPassCallback([&](llvm::StringRef name, llvm::Any ir) {
+			/* A function pass is reported to the heartbeat only: which function it is on
+			 * and how large, so a pass that stays on one function for an hour is
+			 * visible from outside. */
+			if (const auto *fp = llvm::any_cast<const llvm::Function *>(&ir)) {
+				const auto *F = *fp;
+				unsigned long n = 0;
+				for (auto &BB : *F)
+					n += BB.size();
+				hgprog::setPass(name.str(), F->getName().str(), n);
+				return;
+			}
 			if (llvm::any_cast<const llvm::Module *>(&ir) == nullptr)
 				return;
+			hgprog::setPass(name.str(), "<module>", 0);
 			hgPassStart = std::chrono::steady_clock::now();
 			std::cerr << "HG-PASS begin " << name.str() << " rss_mb=" << hgRss() << "\n";
 		});

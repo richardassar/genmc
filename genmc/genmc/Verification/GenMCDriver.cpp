@@ -12,6 +12,7 @@
  */
 
 #include <cstdlib>
+#include "genmc/Support/HgProgress.hpp"
 #include "GenMCDriver.hpp"
 #include "genmc/Execution/Consistency/BoundDecider.hpp"
 #include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
@@ -367,6 +368,9 @@ auto GenMCDriver::handleExecutionEnd() -> std::optional<VerificationError>
 	GENMC_DEBUG(if (getConf()->boundsHistogram && inVerificationMode()) trackExecutionBound(););
 
 	++result.explored;
+	hgprog::state().explored.store(result.explored, std::memory_order_relaxed);
+	hgprog::state().blocked.store(result.exploredBlocked, std::memory_order_relaxed);
+	hgprog::state().instsThisExec.store(0, std::memory_order_relaxed);
 	/* Progress, when asked for: how many executions so far, how large this one was, and the
 	 * rate -- the numbers that let a run on a large module be extrapolated or abandoned. */
 	if (const char *hgProg = std::getenv("HG_GENMC_PROGRESS")) {
@@ -411,7 +415,15 @@ auto GenMCDriver::handleExecutionEnd() -> std::optional<VerificationError>
 bool GenMCDriver::done()
 {
 	auto validExecution = false;
+	hgprog::setPhase("explore");
 	while (!isHalting() && !validExecution) {
+		{
+			size_t pending = 0;
+			for (const auto &e : execStack)
+				pending += e.getWorkqueue().size();
+			hgprog::state().execDepth.store(execStack.size(), std::memory_order_relaxed);
+			hgprog::state().pendingRevisits.store(pending, std::memory_order_relaxed);
+		}
 		auto item = getExec().getWorkqueue().getNext();
 		if (!item) {
 			if (popExecution())
