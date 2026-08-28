@@ -16,6 +16,7 @@
 #include "genmc/Support/ActionEnums.hpp"
 #include "passes/InternalFunctions.hpp"
 
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -131,27 +132,32 @@ auto extractsFromCAS(ExtractValueInst *extract) -> AtomicCmpXchgInst *
 	return dyn_cast<AtomicCmpXchgInst>(extract->getAggregateOperand());
 }
 
-static auto isDependentOn(const Instruction *i1, const Instruction *i2,
-			  VSet<const Instruction *> chain) -> bool
+/* i1 depends on i2 iff i2 is reachable from i1 through operand edges. Reachability is a
+ * visited-set search: an instruction that has been explored once does not reach i2 through
+ * any path, so it is never explored again. Iterative, so a long dependence chain cannot
+ * exhaust the stack. */
+auto isDependentOn(const Instruction *i1, const Instruction *i2) -> bool
 {
-	if (!i1 || !i2 || chain.contains(i1))
+	if (!i1 || !i2)
 		return false;
 
-	for (const auto &use : i1->operands()) {
-		if (auto *i = dyn_cast<Instruction>(use.get())) {
-			chain.insert(i1);
-			if (i == i2 || isDependentOn(i, i2, chain))
-				return true;
-			chain.erase(i1);
+	llvm::DenseSet<const Instruction *> visited;
+	llvm::SmallVector<const Instruction *, 64> work;
+	work.push_back(i1);
+	while (!work.empty()) {
+		const auto *cur = work.pop_back_val();
+		if (!visited.insert(cur).second)
+			continue;
+		for (const auto &use : cur->operands()) {
+			if (auto *i = dyn_cast<Instruction>(use.get())) {
+				if (i == i2)
+					return true;
+				if (!visited.contains(i))
+					work.push_back(i);
+			}
 		}
 	}
 	return false;
-}
-
-auto isDependentOn(const Instruction *i1, const Instruction *i2) -> bool
-{
-	const VSet<const Instruction *> chain;
-	return isDependentOn(i1, i2, chain);
 }
 
 auto hasSideEffects(const Instruction *i, const VSet<Function *> *cleanFuns /* = nullptr */) -> bool
