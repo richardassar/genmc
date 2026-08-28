@@ -140,6 +140,29 @@ Thread &Interpreter::createAddNewThread(llvm::Function *F, SVal arg, int tid, in
 	return addNewThread(std::move(thr));
 }
 
+void Interpreter::initThreadLocal(char *base, const Constant *init, Type *ty)
+{
+	const auto &DL = getDataLayout();
+	if (auto *st = dyn_cast<StructType>(ty)) {
+		const auto *SL = DL.getStructLayout(st);
+		for (unsigned i = 0, n = st->getNumElements(); i < n; ++i)
+			initThreadLocal(base + SL->getElementOffset(i), init->getAggregateElement(i),
+					st->getElementType(i));
+		return;
+	}
+	if (auto *at = dyn_cast<ArrayType>(ty)) {
+		const uint64_t elemSize = DL.getTypeAllocSize(at->getElementType());
+		for (uint64_t i = 0, n = at->getNumElements(); i < n; ++i)
+			initThreadLocal(base + i * elemSize, init->getAggregateElement(i),
+					at->getElementType());
+		return;
+	}
+	const uint64_t size = DL.getTypeAllocSize(ty);
+	const GenericValue gv = getConstantValue(const_cast<Constant *>(init));
+	for (uint64_t b = 0; b < size; ++b)
+		threadLocalVars[base + b] = gv;
+}
+
 void Interpreter::collectStaticAddresses()
 {
 	auto *M = Modules.back().get();
@@ -149,10 +172,11 @@ void Interpreter::collectStaticAddresses()
 		char *ptr = static_cast<char *>(GVTOP(getConstantValue(&v)));
 		const uint64_t typeSize = getDataLayout().getTypeAllocSize(v.getValueType());
 
-		/* Record whether this is a thread local variable or not */
+		/* Record whether this is a thread local variable or not. A thread-local is held
+		 * as one value per byte of its storage; an aggregate initializer is walked to its
+		 * scalar leaves, each stored at the bytes its layout gives it. */
 		if (v.isThreadLocal()) {
-			for (auto i = 0u; i < typeSize; i++)
-				threadLocalVars[ptr + i] = getConstantValue(v.getInitializer());
+			initThreadLocal(ptr, v.getInitializer(), v.getValueType());
 			continue;
 		}
 
