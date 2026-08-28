@@ -38,20 +38,6 @@ using namespace llvm;
  * f->f1->f2->f3->f4->f2->f3->f4... => f->f2->f3->f4->f2->f3->f4
  * f->f1->f2->f2->f2->... => main->f2->f2->f2...
  */
-static auto isRecursive(CallGraph &CG, Function &F) -> bool
-{
-	for (auto sccIt = scc_begin(&CG); !sccIt.isAtEnd(); ++sccIt) {
-		if (std::ranges::find(*sccIt, CG[&F]) != sccIt->end() && sccIt.hasCycle())
-			return true;
-	}
-	return false;
-}
-
-static auto isInlinable(CallGraph &CG, Function &F) -> bool
-{
-	return !F.isDeclaration() && !isInternalFunction(F.getName().str()) && !isRecursive(CG, F);
-}
-
 static auto inlineCall(CallBase *callBase) -> bool
 {
 	llvm::InlineFunctionInfo ifi;
@@ -59,27 +45,23 @@ static auto inlineCall(CallBase *callBase) -> bool
 	return InlineFunction(*callBase, ifi).isSuccess();
 }
 
-static auto inlineFunction(Module &M, Function *toInline) -> bool
+/* Inline every call to `toInline`. The call sites come from the function's own use list, which
+ * LLVM maintains, rather than from a scan of every instruction in the module: on a module of a
+ * few million instructions the scan was the whole cost of this pass, once per function. */
+static auto inlineFunction(Function *toInline) -> bool
 {
 	std::vector<CallBase *> calls;
-	for (auto &F : M) {
-		if (&F == toInline) /* No need to inline calls to itself */
+	for (auto *u : toInline->users()) {
+		auto *cb = dyn_cast<CallBase>(u);
+		if (!cb || cb->getCalledFunction() != toInline)
 			continue;
-
-		for (auto &iit : instructions(F)) {
-			if (!isa<InvokeInst>(&iit) && !isa<CallInst>(&iit))
-				continue;
-
-			auto *callBase = cast<CallBase>(&iit);
-			if (callBase->getCalledFunction() == toInline)
-				calls.push_back(callBase);
-		}
+		if (cb->getFunction() == toInline) /* No need to inline calls to itself */
+			continue;
+		calls.push_back(cb);
 	}
-
 	auto changed = false;
-	for (auto *ci : calls) {
+	for (auto *ci : calls)
 		changed |= inlineCall(ci);
-	}
 	return changed;
 }
 
@@ -87,12 +69,21 @@ auto FunctionInlinerPass::run(Module &M, ModuleAnalysisManager & /*AM*/) -> Pres
 {
 	CallGraph CG(M);
 
+	/* The SCC iteration is post-order -- a function's callees come before it -- so by the
+	 * time a function is inlined into its callers its own inlinable calls are already gone,
+	 * and nothing is inlined twice. One walk of the SCC forest decides recursion for every
+	 * function at once; deciding it per function re-walked the forest that many times. */
 	auto changed = false;
-	for (auto &F : M) {
-		/* Don't try on functions with empty bodies, external declarations, GenMCs own
-		 * functions and (mutually) recursive functions */
-		if (!F.empty() && isInlinable(CG, F))
-			changed |= inlineFunction(M, &F);
+	for (auto sccIt = scc_begin(&CG); !sccIt.isAtEnd(); ++sccIt) {
+		if (sccIt.hasCycle())
+			continue; /* (mutually) recursive: never inlined */
+		for (auto *node : *sccIt) {
+			auto *F = node->getFunction();
+			/* Skip functions with empty bodies, external declarations and GenMC's own */
+			if (!F || F->isDeclaration() || isInternalFunction(F->getName().str()))
+				continue;
+			changed |= inlineFunction(F);
+		}
 	}
 	return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
