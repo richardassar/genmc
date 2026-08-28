@@ -3205,6 +3205,15 @@ void Interpreter::callAtExit(Function *F, const std::vector<GenericValue> &ArgVa
 	returnValueToCaller(F->getReturnType(), INT_TO_GV(F->getReturnType(), 0));
 }
 
+/* __cxa_thread_atexit(dtor, obj, dso): the registration a thread_local with a destructor
+ * makes on first use. The checker runs no thread-exit destructors -- a thread's end is the
+ * end of its events -- so the registration records nothing and reports success. */
+void Interpreter::callThreadAtExit(Function *F, const std::vector<GenericValue> &ArgVals,
+				   const std::unique_ptr<EventDeps> &specialDeps)
+{
+	returnValueToCaller(F->getReturnType(), INT_TO_GV(F->getReturnType(), 0));
+}
+
 void Interpreter::callMutexInit(Function *F, const std::vector<GenericValue> &ArgVals,
 				const std::unique_ptr<EventDeps> &specialDeps)
 {
