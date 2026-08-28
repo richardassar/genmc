@@ -589,6 +589,7 @@ private: // Helper functions
 
 	/* Collects the addresses (and some naming information) for all variables with
 	 * static storage. Also calculates the starting address of the allocation pool */
+	void initThreadLocal(char *base, const llvm::Constant *init, llvm::Type *ty);
 	void collectStaticAddresses();
 
 	/* Sets up how some errors will be reported to the user */
