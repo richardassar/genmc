@@ -12,6 +12,7 @@
  */
 
 #include "llvm/IR/PassInstrumentation.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
@@ -389,6 +390,12 @@ void printLLVMModule(llvm::Module &mod, const std::string &filename)
 	auto flags = llvm::sys::fs::OF_None;
 	std::error_code errs;
 	auto out = std::make_unique<llvm::raw_fd_ostream>(filename.c_str(), errs, flags);
+	/* A ".bc" name writes bitcode: it round-trips exactly and parses in seconds, where the
+	 * textual form of a multi-gigabyte module emits block labels its own reader rejects. */
+	if (filename.size() > 3 && filename.compare(filename.size() - 3, 3, ".bc") == 0) {
+		llvm::WriteBitcodeToFile(mod, *out);
+		return;
+	}
 
 	/* TODO: Do we need an exception? If yes, properly handle it */
 	if (errs) {
