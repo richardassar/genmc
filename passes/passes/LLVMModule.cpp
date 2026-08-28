@@ -248,11 +248,18 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		return n;
 	};
 	if (hgProgress) {
-		pic.registerBeforeNonSkippedPassCallback([&](llvm::StringRef name, llvm::Any) {
+		pic.registerBeforeNonSkippedPassCallback([&](llvm::StringRef name, llvm::Any ir) {
+			if (llvm::any_cast<const llvm::Module *>(&ir) == nullptr)
+				return;
 			hgPassStart = std::chrono::steady_clock::now();
 			std::cerr << "HG-PASS begin " << name.str() << " rss_mb=" << hgRss() << "\n";
 		});
-		pic.registerAfterPassCallback([&](llvm::StringRef name, llvm::Any, const llvm::PreservedAnalyses &) {
+		pic.registerAfterPassCallback([&](llvm::StringRef name, llvm::Any ir, const llvm::PreservedAnalyses &) {
+			/* Function passes run once per function; counting the whole module after each
+			 * of them is quadratic and was itself the slowest part of the transform. */
+			const bool modulePass = llvm::any_cast<const llvm::Module *>(&ir) != nullptr;
+			if (!modulePass)
+				return;
 			const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - hgPassStart).count();
 			std::cerr << "HG-PASS end   " << name.str() << " secs=" << secs << " rss_mb=" << hgRss()
 				  << " insts=" << hgInsts() << "\n";
