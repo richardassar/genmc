@@ -14,6 +14,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <vector>
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,6 +37,14 @@ struct State {
 	std::atomic<uint64_t> instsThisExec{0};
 	std::atomic<uint64_t> instsTotal{0};
 	std::atomic<int64_t> exploreStartNs{0};
+	// The current pass group: how much of the module it has been through, and what each
+	// pass has cost so far. A function is counted when its first pass of the group starts.
+	std::atomic<uint64_t> groupTotalFns{0};
+	std::atomic<uint64_t> groupTotalInsts{0};
+	std::atomic<uint64_t> groupDoneFns{0};
+	std::atomic<uint64_t> groupDoneInsts{0};
+	std::map<std::string, double> passSeconds;      // guarded by mtx
+	std::map<std::string, uint64_t> passInsts;      // instructions the pass has been over
 };
 
 inline State &state()
@@ -59,15 +70,66 @@ inline unsigned long rssMb()
 	return resident * 4096UL / (1024UL * 1024UL);
 }
 
+/* A module-level pass (or a pass group) starts: the whole module is its problem size. */
+inline void beginGroup(uint64_t totalFns, uint64_t totalInsts)
+{
+	auto &s = state();
+	std::lock_guard<std::mutex> lk(s.mtx);
+	s.groupTotalFns.store(totalFns, std::memory_order_relaxed);
+	s.groupTotalInsts.store(totalInsts, std::memory_order_relaxed);
+	s.groupDoneFns.store(0, std::memory_order_relaxed);
+	s.groupDoneInsts.store(0, std::memory_order_relaxed);
+	s.function.clear();
+}
+
 inline void setPass(const std::string &pass, const std::string &function, uint64_t functionInsts)
 {
 	auto &s = state();
 	std::lock_guard<std::mutex> lk(s.mtx);
 	s.phase = "transform";
+	if (function != s.function) {
+		s.groupDoneFns.fetch_add(1, std::memory_order_relaxed);
+		s.groupDoneInsts.fetch_add(functionInsts, std::memory_order_relaxed);
+	}
 	s.pass = pass;
 	s.function = function;
 	s.functionInsts.store(functionInsts, std::memory_order_relaxed);
 	s.passStartNs.store(nowNs(), std::memory_order_relaxed);
+}
+
+/* A pass finished on a function: charge its time and the function's size to that pass. */
+inline void endPass(const std::string &pass, double secs, uint64_t functionInsts)
+{
+	auto &s = state();
+	std::lock_guard<std::mutex> lk(s.mtx);
+	s.passSeconds[pass] += secs;
+	s.passInsts[pass] += functionInsts;
+}
+
+/* The costliest passes so far, "name=secs/Minsts" -- seconds per million instructions is the
+ * number that says whether a pass is growing faster than the module. */
+inline std::string passTable(size_t top)
+{
+	auto &s = state();
+	std::vector<std::pair<std::string, double>> v;
+	{
+		std::lock_guard<std::mutex> lk(s.mtx);
+		for (auto &kv : s.passSeconds)
+			v.emplace_back(kv.first, kv.second);
+	}
+	std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.second > b.second; });
+	std::string out;
+	for (size_t i = 0; i < v.size() && i < top; ++i) {
+		uint64_t insts = 0;
+		{
+			std::lock_guard<std::mutex> lk(s.mtx);
+			insts = s.passInsts[v[i].first];
+		}
+		const double perM = insts ? v[i].second / (insts / 1e6) : 0.0;
+		out += (i ? " " : "") + v[i].first + "=" + std::to_string(v[i].second).substr(0, 7) + "s/" +
+		       std::to_string(perM).substr(0, 6) + "s.per.Minst";
+	}
+	return out;
 }
 
 inline void setPhase(const char *phase)
@@ -95,7 +157,12 @@ inline void heartbeat()
 		const double inPass = (now - s.passStartNs.load(std::memory_order_relaxed)) / 1e9;
 		std::cerr << " pass=" << pass << " fn=" << function
 			  << " fn_insts=" << s.functionInsts.load(std::memory_order_relaxed)
-			  << " in_pass_s=" << inPass;
+			  << " in_pass_s=" << inPass
+			  << " group_fns=" << s.groupDoneFns.load(std::memory_order_relaxed) << "/"
+			  << s.groupTotalFns.load(std::memory_order_relaxed)
+			  << " group_insts=" << s.groupDoneInsts.load(std::memory_order_relaxed) << "/"
+			  << s.groupTotalInsts.load(std::memory_order_relaxed)
+			  << " top=[" << passTable(3) << "]";
 	} else if (phase == "explore") {
 		const double secs = (now - s.exploreStartNs.load(std::memory_order_relaxed)) / 1e9;
 		const auto n = s.explored.load(std::memory_order_relaxed);

@@ -264,6 +264,13 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 			}
 			if (llvm::any_cast<const llvm::Module *>(&ir) == nullptr)
 				return;
+			{
+				unsigned long fns = 0;
+				for (auto &F : mod)
+					if (!F.isDeclaration())
+						++fns;
+				hgprog::beginGroup(fns, hgInsts());
+			}
 			hgprog::setPass(name.str(), "<module>", 0);
 			hgPassStart = std::chrono::steady_clock::now();
 			std::cerr << "HG-PASS begin " << name.str() << " rss_mb=" << hgRss() << "\n";
@@ -272,11 +279,17 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 			/* Function passes run once per function; counting the whole module after each
 			 * of them is quadratic and was itself the slowest part of the transform. */
 			const bool modulePass = llvm::any_cast<const llvm::Module *>(&ir) != nullptr;
-			if (!modulePass)
+			if (!modulePass) {
+				if (const auto *fp = llvm::any_cast<const llvm::Function *>(&ir)) {
+					auto &st = hgprog::state();
+					const double secs = (hgprog::nowNs() - st.passStartNs.load(std::memory_order_relaxed)) / 1e9;
+					hgprog::endPass(name.str(), secs, st.functionInsts.load(std::memory_order_relaxed));
+				}
 				return;
+			}
 			const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - hgPassStart).count();
 			std::cerr << "HG-PASS end   " << name.str() << " secs=" << secs << " rss_mb=" << hgRss()
-				  << " insts=" << hgInsts() << "\n";
+				  << " insts=" << hgInsts() << " passes=[" << hgprog::passTable(6) << "]\n";
 		});
 		mam.registerPass([&] { return llvm::PassInstrumentationAnalysis(&pic); });
 		fam.registerPass([&] { return llvm::PassInstrumentationAnalysis(&pic); });
