@@ -30,6 +30,7 @@
 #include "Runtime/Interpreter.h"
 #include "genmc/Execution/Event.hpp"
 #include "genmc/Support/Error.hpp"
+#include "genmc/Support/HgProgress.hpp"
 #include "genmc/Support/SExprVisitor.hpp"
 #include "genmc/Verification/GenMCDriver.hpp"
 #include "passes/LLVMUtils.hpp"
@@ -3472,6 +3473,8 @@ void Interpreter::run()
 		llvm::ExecutionContext &SF = ECStack().back();
 		llvm::Instruction &I = *SF.CurInst++;
 		visit(I);
+		hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);
+		hgprog::state().instsTotal.fetch_add(1, std::memory_order_relaxed);
 		if (!ECStack().empty()) {
 			dynState.globalInstructions[currPos().thread].kind =
 				getInstKind(&*ECStack().back().CurInst);

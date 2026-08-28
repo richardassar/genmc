@@ -31,6 +31,9 @@ public:
 	/** Returns whether this worklist is empty */
 	[[nodiscard]] auto empty() const -> bool { return wlist_.empty(); }
 
+	/** Items still to examine */
+	[[nodiscard]] auto size() const -> size_t { return wlist_.size(); }
+
 	/** Adds an item to the worklist */
 	void add(auto &&item) { wlist_.emplace_back(std::move(item)); }
 
