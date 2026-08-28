@@ -11,6 +11,7 @@
  *     https://opensource.org/licenses/MIT
  */
 
+#include <cstdlib>
 #include "GenMCDriver.hpp"
 #include "genmc/ADT/DepView.hpp"
 #include "genmc/Execution/Consistency/BoundDecider.hpp"
@@ -391,6 +392,21 @@ auto GenMCDriver::handleExecutionEnd() -> std::optional<VerificationError>
 	GENMC_DEBUG(if (getConf()->boundsHistogram && inVerificationMode()) trackExecutionBound(););
 
 	++result.explored;
+	/* Progress, when asked for: how many executions so far, how large this one was, and the
+	 * rate -- the numbers that let a run on a large module be extrapolated or abandoned. */
+	if (const char *hgProg = std::getenv("HG_GENMC_PROGRESS")) {
+		static const auto hgStart = std::chrono::steady_clock::now();
+		static const long hgEvery = std::max(1L, std::atol(hgProg));
+		const auto n = result.explored;
+		if (n <= 10 || n % hgEvery == 0) {
+			unsigned long events = 0;
+			for (auto t = 0u; t < g.getNumThreads(); ++t) events += g.getThreadSize(t);
+			const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - hgStart).count();
+			std::cerr << "HG-PROGRESS explored=" << n << " blocked=" << result.exploredBlocked
+				  << " events_in_this=" << events << " elapsed_s=" << secs
+				  << " rate_per_s=" << (secs > 0 ? n / secs : 0.0) << "\n";
+		}
+	}
 	if (fullExecutionExceedsBound())
 		++result.boundExceeding;
 

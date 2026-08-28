@@ -11,6 +11,11 @@
  *     https://opensource.org/licenses/MIT
  */
 
+#include "llvm/IR/PassInstrumentation.h"
+#include <iostream>
+#include <fstream>
+#include <cstdlib>
+#include <chrono>
 #include "LLVMModule.hpp"
 #include "genmc/Support/Error.hpp"
 #include "genmc/Support/SExprVisitor.hpp"
@@ -223,7 +228,40 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 	fam.registerPass([&] { return BisimilarityAnalysis(); });
 	fam.registerPass([&] { return LoadAnnotationAnalysis(); });
 
-	llvm::PassBuilder PB;
+	/* Progress through the transformation, when asked for: which pass is running, how long it
+	 * took, the resident set after it and the module's instruction count -- the numbers that
+	 * say where the time and memory of a large module go, and whether to keep waiting. */
+	llvm::PassInstrumentationCallbacks pic;
+	const bool hgProgress = std::getenv("HG_GENMC_PROGRESS") != nullptr;
+	static std::chrono::steady_clock::time_point hgPassStart;
+	auto hgRss = [] {
+		std::ifstream f("/proc/self/statm");
+		unsigned long size = 0, resident = 0;
+		f >> size >> resident;
+		return resident * 4096UL / (1024UL * 1024UL);
+	};
+	auto hgInsts = [&mod] {
+		unsigned long n = 0;
+		for (auto &F : mod)
+			for (auto &BB : F)
+				n += BB.size();
+		return n;
+	};
+	if (hgProgress) {
+		pic.registerBeforeNonSkippedPassCallback([&](llvm::StringRef name, llvm::Any) {
+			hgPassStart = std::chrono::steady_clock::now();
+			std::cerr << "HG-PASS begin " << name.str() << " rss_mb=" << hgRss() << "\n";
+		});
+		pic.registerAfterPassCallback([&](llvm::StringRef name, llvm::Any, const llvm::PreservedAnalyses &) {
+			const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - hgPassStart).count();
+			std::cerr << "HG-PASS end   " << name.str() << " secs=" << secs << " rss_mb=" << hgRss()
+				  << " insts=" << hgInsts() << "\n";
+		});
+		mam.registerPass([&] { return llvm::PassInstrumentationAnalysis(&pic); });
+		fam.registerPass([&] { return llvm::PassInstrumentationAnalysis(&pic); });
+	}
+
+	llvm::PassBuilder PB(nullptr, llvm::PipelineTuningOptions(), std::nullopt, &pic);
 	PB.registerModuleAnalyses(mam);
 	PB.registerCGSCCAnalyses(cgam);
 	PB.registerFunctionAnalyses(fam);
