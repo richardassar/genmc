@@ -11,6 +11,7 @@
  *     https://opensource.org/licenses/MIT
  */
 
+#include "genmc/Support/HgProgress.hpp"
 #include "SpinAssumePass.hpp"
 #include "genmc/ADT/VSet.hpp"
 #include "genmc/Execution/EventAttr.hpp"
@@ -694,6 +695,12 @@ auto SpinAssumePass::run(Module &M, ModuleAnalysisManager &MAM) const -> Preserv
 	auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 	auto modified = false;
 	for (auto &F : M | std::views::filter([&](auto &F) { return !F.isDeclaration(); })) {
+		if (hgprog::enabled()) {
+			unsigned long n = 0;
+			for (auto &BB : F)
+				n += BB.size();
+			hgprog::setPass("SpinAssumePass", F.getName().str(), n);
+		}
 		auto &LI = FAM.getResult<LoopAnalysis>(F);
 		for (auto &L : std::views::reverse(LI.getLoopsInPreorder())) {
 			modified |= checkLoop(L, MAM, markStarts_);
