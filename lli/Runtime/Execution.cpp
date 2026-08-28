@@ -1691,8 +1691,10 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 		cmpRes = res == GV_TO_SVAL(cmpVal, typ);                                           \
 		updateDataDeps(getCurThr().id, &I, currPos());                                     \
 		updateAddrPoDeps(getCurThr().id, I.getPointerOperand());                           \
-		if (!cmpRes)                                                                       \
+		if (!cmpRes) {                                                                     \
+			driver->noteCasFailure(thr.id, toGenMCOrdering(I.getFailureOrdering()));   \
 			break;                                                                     \
+		}                                                                                  \
 		auto sDeps = makeEventDeps(getDataDeps(getCurThr().id, I.getPointerOperand()),     \
 					   getDataDeps(getCurThr().id, I.getNewValOperand()),      \
 					   getCtrlDeps(getCurThr().id), getAddrPoDeps(thr.id),     \

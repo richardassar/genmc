@@ -157,24 +157,62 @@ static auto getPromotionGEPType(Value *op) -> Type *
 		return v->getValueType();
 	if (auto *ai = dyn_cast<AllocaInst>(op))
 		return ai->getAllocatedType();
-	if (auto *gepi = dyn_cast<GetElementPtrInst>(op))
+	if (auto *gepi = dyn_cast<GetElementPtrInst>(op)) {
+		/* A GEP whose indices are all zero names the object it indexes into, not a
+		 * member of it: `getelementptr [2 x i32], ptr %a, i64 0, i64 0` is the array,
+		 * and a memcpy of the whole array through it must be promoted field by field
+		 * over the array's type. Its result element type (i32 here) is only the first
+		 * element, and promoting by that either trips typeSizeDst >= len or copies one
+		 * element of several. */
+		if (gepi->hasAllZeroIndices())
+			return gepi->getSourceElementType();
 		return gepi->getResultElementType();
+	}
 	UNREACHABLE();
 }
 
+/* The type a mem intrinsic of `len` bytes is promoted over, given the type its destination
+ * names. After SROA a copy is often byte-addressed -- `getelementptr i8, ptr %p, i64 5` for a
+ * three-byte tail of a struct -- and the named type (i8) is then smaller than the copy. Such a
+ * copy is promoted over `[len/size x T]`: the same accesses the intrinsic performs, at the width
+ * the destination names, which is the width the program reads them back at. */
+static auto getPromotionTypeForLen(Type *named, uint64_t len, const DataLayout &DL) -> Type *
+{
+	auto size = DL.getTypeStoreSize(named);
+	if (size >= len || size == 0)
+		return named;
+	if ((named->isIntegerTy() || named->isPointerTy()) && len % size == 0)
+		return ArrayType::get(named, len / size);
+	return named;
+}
+
 static void promoteMemCpy(IRBuilder<> &builder, Value *dst, Value *src,
-			  const std::vector<Value *> &args, Type *typ, uint64_t &remainingLen)
+			  const std::vector<Value *> &args, Type *typ, uint64_t &remainingLen,
+			  Type *gepTy)
 {
 	if (remainingLen == 0)
 		return;
 
-	auto *srcGEP =
-		builder.CreateInBoundsGEP(getPromotionGEPType(src), src, args, "memcpy.src.gep");
-	auto *dstGEP =
-		builder.CreateInBoundsGEP(getPromotionGEPType(dst), dst, args, "memcpy.dst.gep");
+	auto *srcGEP = builder.CreateInBoundsGEP(gepTy, src, args, "memcpy.src.gep");
+	auto *dstGEP = builder.CreateInBoundsGEP(gepTy, dst, args, "memcpy.dst.gep");
 
 	auto len = builder.GetInsertBlock()->getModule()->getDataLayout().getTypeStoreSize(typ);
-	VERIFY(len <= remainingLen);
+	if (len > remainingLen) {
+		/* The copy ends inside this leaf: its length is not a multiple of the type it is
+		 * promoted over, which happens when a compiler splits a struct copy and the tail
+		 * is padding. The bytes that are copied are copied one at a time, at the width
+		 * a byte-addressed intrinsic already implies for them. */
+		auto *i8Ty = IntegerType::getInt8Ty(typ->getContext());
+		auto *i64Ty = IntegerType::getInt64Ty(typ->getContext());
+		for (uint64_t b = 0; b < remainingLen; ++b) {
+			auto *off = Constant::getIntegerValue(i64Ty, APInt(64, b));
+			auto *sg = builder.CreateInBoundsGEP(i8Ty, srcGEP, {off}, "memcpy.src.tail");
+			auto *dg = builder.CreateInBoundsGEP(i8Ty, dstGEP, {off}, "memcpy.dst.tail");
+			builder.CreateStore(builder.CreateLoad(i8Ty, sg, "memcpy.src.tail.load"), dg);
+		}
+		remainingLen = 0;
+		return;
+	}
 
 	remainingLen -= len;
 	auto *srcLoad = builder.CreateLoad(typ, srcGEP, "memcpy.src.load");
@@ -182,7 +220,7 @@ static void promoteMemCpy(IRBuilder<> &builder, Value *dst, Value *src,
 }
 
 static void promoteMemSet(IRBuilder<> &builder, Value *dst, Value *argVal,
-			  const std::vector<Value *> &args, Type *typ)
+			  const std::vector<Value *> &args, Type *typ, Type *gepTy)
 {
 	VERIFY(typ->isIntegerTy() || typ->isPointerTy());
 	VERIFY(isa<ConstantInt>(argVal));
@@ -193,8 +231,7 @@ static void promoteMemSet(IRBuilder<> &builder, Value *dst, Value *argVal,
 	long int ival = dyn_cast<ConstantInt>(argVal)->getSExtValue();
 	Value *val = Constant::getIntegerValue(typ, APInt(sizeInBits, ival));
 
-	Value *dstGEP =
-		builder.CreateInBoundsGEP(getPromotionGEPType(dst), dst, args, "memset.dst.gep");
+	Value *dstGEP = builder.CreateInBoundsGEP(gepTy, dst, args, "memset.dst.gep");
 	Value *dstStore = builder.CreateStore(val, dstGEP);
 }
 
@@ -340,23 +377,65 @@ static auto tryPromoteMemCpy(MemCpyInst *MI, SmallVector<llvm::MemIntrinsic *, 8
 
 	/* Recast args to same types for GEP indexing later */
 	auto [src, dst] = getRecastedOperands(MI, builder);
-	auto *dstTyp = getPromotionGEPType(dst);
+	const auto &DL = MI->getParent()->getModule()->getDataLayout();
+	auto *dstTyp = getPromotionTypeForLen(getPromotionGEPType(dst), len, DL);
 	VERIFY(dstTyp);
 
 	/* To ensure we only copy "len" bytes from total */
-	auto typeSizeDst = MI->getParent()->getModule()->getDataLayout().getTypeStoreSize(dstTyp);
+	auto typeSizeDst = DL.getTypeStoreSize(dstTyp);
 	VERIFY(typeSizeDst >= len);
 
 	std::vector<Value *> args = {nullInt};
 	promoteMemIntrinsic(dstTyp, args, [&](Type *typ, const std::vector<Value *> &args) {
-		promoteMemCpy(builder, dst, src, args, typ, len);
+		promoteMemCpy(builder, dst, src, args, typ, len, dstTyp);
 	});
 	promoted.push_back(MI);
 	return true;
 }
 
+/* A memset whose destination the pass cannot see (a phi, a call result, a parameter) is still
+ * promotable when its length is a constant: it is `len / w` stores of the pattern at width w,
+ * where w is the alignment the intrinsic itself asserts for the destination, capped at a word.
+ * clang emits exactly this shape for a constructor loop zeroing one field per iteration
+ * (`memset(phi-ptr, 0, 1)` for each std::atomic<bool> of an array), which instcombine used to
+ * fold into a plain store; a pipeline that does not run instcombine hands it here. */
+static auto tryPromoteOpaqueMemSet(MemSetInst *MS, SmallVector<MemIntrinsic *, 8> &promoted) -> bool
+{
+	auto *lenC = dyn_cast<ConstantInt>(MS->getLength());
+	auto *valC = dyn_cast<ConstantInt>(MS->getValue());
+	if (!lenC || !valC)
+		return false;
+	auto len = lenC->getZExtValue();
+	if (len == 0) {
+		promoted.push_back(MS);
+		return true;
+	}
+	uint64_t w = MS->getDestAlign().valueOrOne().value();
+	if (w > 8)
+		w = 8;
+	while (w > 1 && len % w != 0)
+		w /= 2;
+	IRBuilder<> builder(MS);
+	auto *elemTy = IntegerType::get(MS->getContext(), 8 * w);
+	auto *i64Ty = IntegerType::getInt64Ty(MS->getContext());
+	/* The pattern byte replicated to the store width */
+	uint64_t byte = valC->getZExtValue() & 0xff, pattern = 0;
+	for (uint64_t i = 0; i < w; ++i)
+		pattern |= byte << (8 * i);
+	auto *val = ConstantInt::get(elemTy, pattern);
+	for (uint64_t i = 0; i < len / w; ++i) {
+		auto *gep = builder.CreateInBoundsGEP(elemTy, MS->getDest(),
+						      {ConstantInt::get(i64Ty, i)}, "memset.opaque.gep");
+		builder.CreateStore(val, gep);
+	}
+	promoted.push_back(MS);
+	return true;
+}
+
 static auto tryPromoteMemSet(MemSetInst *MS, SmallVector<MemIntrinsic *, 8> &promoted) -> bool
 {
+	if (!isPromotableMemIntrinsicOperand(MS->getDest()) && tryPromoteOpaqueMemSet(MS, promoted))
+		return true;
 	if (!canPromoteMemIntrinsic(MS))
 		return false;
 
@@ -367,12 +446,15 @@ static auto tryPromoteMemSet(MemSetInst *MS, SmallVector<MemIntrinsic *, 8> &pro
 	auto *nullInt = Constant::getNullValue(i64Ty);
 	auto *dstTyp = getPromotionGEPType(dst);
 	VERIFY(dstTyp);
+	if (auto *lenC = dyn_cast<ConstantInt>(MS->getLength()))
+		dstTyp = getPromotionTypeForLen(dstTyp, lenC->getZExtValue(),
+						MS->getParent()->getModule()->getDataLayout());
 
 	IRBuilder<> builder(MS);
 	std::vector<Value *> args = {nullInt};
 
 	promoteMemIntrinsic(dstTyp, args, [&](Type *typ, const std::vector<Value *> &args) {
-		promoteMemSet(builder, dst, val, args, typ);
+		promoteMemSet(builder, dst, val, args, typ, dstTyp);
 	});
 	promoted.push_back(MS);
 	return true;

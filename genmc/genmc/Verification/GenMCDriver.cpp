@@ -804,7 +804,16 @@ auto GenMCDriver::checkLiveness() -> std::optional<VerificationError>
 	/* Collect all threads blocked at spinloops */
 	std::vector<int> spinBlocked;
 	for (auto i = 0U; i < g.getNumThreads(); i++) {
-		if (genmc::isa<SpinloopBlockLabel>(g.getLastThreadLabel(i)))
+		/* An execution in which some thread is blocked for a reason other than a spinloop
+		 * (an assume(false), a helped CAS, a confirmation) is being pruned from the search
+		 * space: the store a spinning thread waits for may be one the blocked thread would
+		 * have issued had the execution continued, so a liveness violation reported here is
+		 * a false positive. (Upstream PR #58.) */
+		const auto *last = g.getLastThreadLabel(i);
+		if (genmc::isa<UserBlockLabel>(last) || genmc::isa<HelpedCASBlockLabel>(last) ||
+		    genmc::isa<ConfirmationBlockLabel>(last))
+			return {};
+		if (genmc::isa<SpinloopBlockLabel>(last))
 			spinBlocked.push_back(i);
 	}
 
@@ -1059,6 +1068,28 @@ EventLabel *GenMCDriver::findConsistentCo(WriteLabel *wLab, std::vector<EventLab
 			return back;
 	}
 	return nullptr;
+}
+
+void GenMCDriver::noteCasFailure(int tid, MemOrdering failOrd)
+{
+	auto &g = getExec().getGraph();
+	if (g.isThreadEmpty(tid))
+		return;
+	auto *lab = genmc::dyn_cast<CasReadLabel>(g.getLastThreadLabel(tid));
+	if (!lab)
+		return;
+	const auto cur = lab->getOrdering();
+	auto hasAcq = [](MemOrdering o) {
+		return o == MemOrdering::Acquire || o == MemOrdering::AcquireRelease ||
+		       o == MemOrdering::SequentiallyConsistent;
+	};
+	if (!hasAcq(failOrd) || hasAcq(cur))
+		return;
+	/* A failed CAS is a read: Acquire, or SC if the failure ordering is SC */
+	lab->setOrdering(failOrd == MemOrdering::SequentiallyConsistent
+				 ? MemOrdering::SequentiallyConsistent
+				 : MemOrdering::Acquire);
+	updateLabelViews(lab);
 }
 
 auto GenMCDriver::handleThreadKill(std::unique_ptr<ThreadKillLabel> kLab)
