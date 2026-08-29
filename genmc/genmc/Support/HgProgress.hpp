@@ -9,6 +9,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -63,8 +64,10 @@ struct State {
 	std::atomic<uint64_t> starts{0};
 	static constexpr size_t kThreads = 64;
 	std::atomic<uint64_t> threadInsts[kThreads] = {};
-	// The instruction the interpreter is executing.
+	// The instruction the interpreter is executing, and the interpreter's own account of the
+	// executing thread's call stack (set by the interpreter; empty until it runs).
 	std::atomic<const llvm::Instruction *> curInst{nullptr};
+	std::function<std::string()> stackDump;
 	// Choice attribution (estimation mode). The state-space estimate of an execution is the
 	// product, over its reads and writes, of the number of alternatives each one has; every
 	// alternative set larger than one is booked here against the site of the instruction

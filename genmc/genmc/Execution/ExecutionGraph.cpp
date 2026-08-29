@@ -62,6 +62,8 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 				  << " reader instruction "
 				  << hgprog::siteName(hgprog::state().curInst.load(std::memory_order_relaxed))
 				  << "\n";
+			if (hgprog::state().stackDump)
+				std::cerr << "  reader's frames, innermost first:\n" << hgprog::state().stackDump();
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
 		auto val = (access.addr.isDynamic() && !initVals_.contains(access.addr))
