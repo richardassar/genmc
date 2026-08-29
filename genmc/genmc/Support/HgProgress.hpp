@@ -45,6 +45,11 @@ struct State {
 	std::atomic<uint64_t> groupDoneInsts{0};
 	std::map<std::string, double> passSeconds;      // guarded by mtx
 	std::map<std::string, uint64_t> passInsts;      // instructions the pass has been over
+	// Exploration profile (HG_GENMC_PROFILE): every 4096th interpreted instruction is
+	// attributed to its function and source line, so the heartbeat names where an execution
+	// spends its instructions -- the loop that iterates to the bound, not a guess about it.
+	std::map<std::string, uint64_t> profile;        // guarded by mtx
+	uint64_t profileSamples{0};                     // guarded by mtx
 };
 
 inline State &state()
@@ -54,6 +59,38 @@ inline State &state()
 }
 
 inline bool enabled() { return std::getenv("HG_GENMC_PROGRESS") != nullptr; }
+inline bool profiling()
+{
+	static const bool on = std::getenv("HG_GENMC_PROFILE") != nullptr;
+	return on;
+}
+
+inline void sample(const std::string &site)
+{
+	auto &s = state();
+	std::lock_guard<std::mutex> g(s.mtx);
+	++s.profile[site];
+	++s.profileSamples;
+}
+
+inline std::string profileTable(size_t n)
+{
+	auto &s = state();
+	std::vector<std::pair<std::string, uint64_t>> v;
+	uint64_t total = 0;
+	{
+		std::lock_guard<std::mutex> g(s.mtx);
+		v.assign(s.profile.begin(), s.profile.end());
+		total = s.profileSamples;
+	}
+	std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.second > b.second; });
+	std::string out;
+	for (size_t i = 0; i < v.size() && i < n; ++i) {
+		if (i) out += " ";
+		out += v[i].first + "=" + std::to_string(total ? 100 * v[i].second / total : 0) + "%";
+	}
+	return out;
+}
 
 inline int64_t nowNs()
 {
@@ -172,6 +209,8 @@ inline void heartbeat()
 			  << " insts_this_exec=" << s.instsThisExec.load(std::memory_order_relaxed)
 			  << " insts_total=" << s.instsTotal.load(std::memory_order_relaxed)
 			  << " elapsed_s=" << secs << " rate_per_s=" << (secs > 0 ? n / secs : 0.0);
+		if (profiling())
+			std::cerr << " profile=[" << profileTable(8) << "]";
 	}
 	std::cerr << "\n";
 }
