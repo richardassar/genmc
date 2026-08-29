@@ -526,15 +526,19 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		if (w == 0) w = ws;
 		else if (ws != 0 && ws != w) w = 1;
 	}
-	if (w == 0) {
-		/* Operands the pass cannot see through (parameters, phis, call results): the
-		 * alignment the intrinsic asserts is the element width clang gives a copy of
-		 * T[n] -- alignof(T) -- capped at a word and at both operands' alignments. */
+	if (w <= 1) {
+		/* Operands the pass cannot see through (parameters, phis, call results), and a
+		 * byte-addressed GEP after SROA (`getelementptr i8, ptr %p, i64 k`) that names i8
+		 * for memory written at word width: the alignment the intrinsic asserts is the
+		 * element width clang gives a copy of T[n] -- alignof(T) -- capped at a word and
+		 * at both operands' alignments. A byte loop over word-written memory reads bytes
+		 * no write label covers, which the checker reports as an uninitialised read. */
 		uint64_t a = MI->getDestAlign().valueOrOne().value();
 		if (auto *MT = dyn_cast<MemTransferInst>(MI))
 			a = std::min<uint64_t>(a, MT->getSourceAlign().valueOrOne().value());
-		w = std::min<uint64_t>(a, 8);
+		w = std::max<uint64_t>(w, std::min<uint64_t>(a, 8));
 		while (w > 1 && (w & (w - 1)) != 0) --w;
+		if (w == 0) w = 1;
 	}
 	auto *elemTy = IntegerType::get(ctx, 8 * static_cast<unsigned>(w));
 
