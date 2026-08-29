@@ -51,8 +51,16 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 
 	/* Special case for initializer */
 	if (lab->getPos().isInitializer()) {
-		/* Dynamic-loc accesses can read init only if the graph has been cut */
-		VERIFY(!(haveNAs_ && access.addr.isDynamic() && !pruned_));
+		/* Dynamic-loc accesses can read init only if the graph has been cut. Otherwise a
+		 * heap location no write in the graph covers, read while non-atomic accesses are
+		 * tracked, is a read of uninitialised memory that reached value resolution; it is
+		 * reported with the address, where an internal check named nothing. */
+		if (haveNAs_ && access.addr.isDynamic() && !pruned_) {
+			std::cerr << "Read of uninitialised heap memory during value resolution: address "
+				  << access.addr.get() << " width " << access.size.get() << " at event ("
+				  << lab->getPos().thread << ", " << lab->getPos().index << ")\n";
+			ERROR("Read of uninitialised heap memory during value resolution\n");
+		}
 		auto val = (access.addr.isDynamic() && !initVals_.contains(access.addr))
 				   ? SVal(0)
 				   : getInitVal(access);
