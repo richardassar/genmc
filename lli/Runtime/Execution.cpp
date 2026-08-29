@@ -3490,13 +3490,15 @@ std::string hgprog::siteName(const llvm::Instruction *I)
 	if (!I)
 		return "?";
 	std::string site = I->getFunction() ? I->getFunction()->getName().str() : "?";
-	if (const auto &loc = I->getDebugLoc()) {
-		/* The line is the callee's after inlining, so the file is named with it. */
+	/* After inlining the location is the callee's; the inlined-at chain leads back out to
+	 * the caller's line, and every frame is named, innermost first. */
+	for (const llvm::DILocation *loc = I->getDebugLoc().get(); loc; loc = loc->getInlinedAt()) {
 		std::string file = loc->getFilename().str();
 		const auto slash = file.find_last_of('/');
 		if (slash != std::string::npos)
 			file = file.substr(slash + 1);
-		site += " " + file + ":" + std::to_string(loc.getLine());
+		site += (loc == I->getDebugLoc().get() ? " " : " <- ") + file + ":" +
+			std::to_string(loc->getLine());
 	}
 	return site;
 }

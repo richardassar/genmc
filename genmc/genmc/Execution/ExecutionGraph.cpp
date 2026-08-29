@@ -15,6 +15,7 @@
 #include "genmc/ADT/Rc.hpp"
 #include "genmc/ADT/VSet.hpp"
 #include "genmc/ADT/View.hpp"
+#include "genmc/Support/HgProgress.hpp"
 #include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
 #include "genmc/Execution/EventLabel.hpp"
 #include "genmc/Execution/Stamp.hpp"
@@ -57,8 +58,10 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 		 * reported with the address, where an internal check named nothing. */
 		if (haveNAs_ && access.addr.isDynamic() && !pruned_) {
 			std::cerr << "Read of uninitialised heap memory during value resolution: address "
-				  << access.addr.get() << " width " << access.size.get() << " at event ("
-				  << lab->getPos().thread << ", " << lab->getPos().index << ")\n";
+				  << access.addr.get() << " width " << access.size.get()
+				  << " reader instruction "
+				  << hgprog::siteName(hgprog::state().curInst.load(std::memory_order_relaxed))
+				  << "\n";
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
 		auto val = (access.addr.isDynamic() && !initVals_.contains(access.addr))
