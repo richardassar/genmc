@@ -3490,8 +3490,14 @@ std::string hgprog::siteName(const llvm::Instruction *I)
 	if (!I)
 		return "?";
 	std::string site = I->getFunction() ? I->getFunction()->getName().str() : "?";
-	if (const auto &loc = I->getDebugLoc())
-		site += ":" + std::to_string(loc.getLine());
+	if (const auto &loc = I->getDebugLoc()) {
+		/* The line is the callee's after inlining, so the file is named with it. */
+		std::string file = loc->getFilename().str();
+		const auto slash = file.find_last_of('/');
+		if (slash != std::string::npos)
+			file = file.substr(slash + 1);
+		site += " " + file + ":" + std::to_string(loc.getLine());
+	}
 	return site;
 }
 
