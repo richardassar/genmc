@@ -13,6 +13,7 @@
 
 #include <cstdlib>
 #include "genmc/Support/HgProgress.hpp"
+#include <cmath>
 #include "GenMCDriver.hpp"
 #include "genmc/ADT/DepView.hpp"
 #include "genmc/Execution/Consistency/BoundDecider.hpp"
@@ -326,6 +327,8 @@ void GenMCDriver::updateStSpaceEstimation()
 		choices.begin(), choices.end(),
 		1.0L, // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 		[](auto sum, auto &kv) { return sum *= kv.second.size(); });
+	if (hgprog::enabled())
+		hgprog::endEstimationSample(sample);
 
 	/* This is the (i+1)-th exploration */
 	auto totalExplored = (long double)result.explored + result.exploredBlocked + 1L;
@@ -1596,8 +1599,11 @@ auto GenMCDriver::handleLoad(std::unique_ptr<ReadLabel> rLab, std::optional<SVal
 	const EventLabel *rf = nullptr;
 
 	if (inEstimationMode() || inRandomMode()) {
-		if (inEstimationMode())
+		if (inEstimationMode()) {
+			if (hgprog::enabled() && stores.size() > 1)
+				hgprog::choice(stores.size());
 			getExec().getChoiceMap().update(lab, stores);
+		}
 		filterAtomicityViolations(lab, stores);
 		rf = pickRandomRf(lab, stores);
 	} else {
@@ -2029,8 +2035,11 @@ auto GenMCDriver::handleStore(std::unique_ptr<WriteLabel> wLab, std::optional<SV
 	const EventLabel *co = nullptr;
 	if (inEstimationMode() || inRandomMode()) {
 		co = pickRandomCo(lab, cos);
-		if (inEstimationMode())
+		if (inEstimationMode()) {
+			if (hgprog::enabled() && cos.size() > 1)
+				hgprog::choice(cos.size());
 			getExec().getChoiceMap().update(lab, cos);
+		}
 	} else {
 		co = findConsistentCo(lab, cos);
 		calcCoOrderings(lab, cos);
@@ -2823,6 +2832,15 @@ void GenMCDriver::calcRevisits(WriteLabel *sLab)
 
 	/* If operating in estimation mode, don't actually revisit */
 	if (inEstimationMode()) {
+		if (hgprog::enabled()) {
+			double growth = 0;
+			for (const auto *l : loads) {
+				const auto k = getExec().getChoiceMap().sizeOf(l->getPos());
+				if (k > 0)
+					growth += std::log2((double)(k + 1) / (double)k);
+			}
+			hgprog::choiceRevisit(growth);
+		}
 		getExec().getChoiceMap().update(loads, sLab);
 		return;
 	}

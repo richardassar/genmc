@@ -3485,36 +3485,42 @@ void Interpreter::runAtExitHandlers()
 	setProgramState(oldState);
 }
 
-/* The instruction the interpreter is executing, for the report a checker-side stop leaves
- * behind: at exit, under HG_GENMC_PROFILE, its function and source line are printed, which
- * is the site of the access an internal stop was resolving. */
-static std::atomic<const llvm::Instruction *> &hgLastInst()
+std::string hgprog::siteName(const llvm::Instruction *I)
 {
-	static std::atomic<const llvm::Instruction *> inst{nullptr};
+	if (!I)
+		return "?";
+	std::string site = I->getFunction() ? I->getFunction()->getName().str() : "?";
+	if (const auto &loc = I->getDebugLoc())
+		site += ":" + std::to_string(loc.getLine());
+	return site;
+}
+
+/* At exit, under HG_GENMC_PROFILE, the instruction the interpreter is executing is printed:
+ * the site of the access a checker-side stop was resolving. */
+static void hgRegisterLastInstructionReport()
+{
 	static const bool registered = [] {
 		if (std::getenv("HG_GENMC_PROFILE"))
 			std::atexit([] {
-				const auto *I = inst.load(std::memory_order_relaxed);
-				if (!I) return;
-				std::string site = I->getFunction() ? I->getFunction()->getName().str() : "?";
-				if (const auto &loc = I->getDebugLoc())
-					site += ":" + std::to_string(loc.getLine());
-				std::cerr << "HG-LAST-INSTRUCTION at exit: " << site << "\n";
+				const auto *I = hgprog::state().curInst.load(std::memory_order_relaxed);
+				if (I)
+					std::cerr << "HG-LAST-INSTRUCTION at exit: " << hgprog::siteName(I)
+						  << "\n";
 			});
 		return true;
 	}();
 	(void)registered;
-	return inst;
 }
 
 void Interpreter::run()
 {
+	hgRegisterLastInstructionReport();
 	auto tid = driver->scheduleNext(dynState.globalInstructions);
 	while (std::holds_alternative<int>(tid)) {
 		scheduleThread(std::get<int>(tid));
 		llvm::ExecutionContext &SF = ECStack().back();
 		llvm::Instruction &I = *SF.CurInst++;
-		hgLastInst().store(&I, std::memory_order_relaxed);
+		hgprog::state().curInst.store(&I, std::memory_order_relaxed);
 		visit(I);
 		const auto instsSoFar =
 			hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);
@@ -3524,12 +3530,8 @@ void Interpreter::run()
 				hgprog::state().threadInsts[t].fetch_add(1, std::memory_order_relaxed);
 		}
 		hgprog::state().instsTotal.fetch_add(1, std::memory_order_relaxed);
-		if ((instsSoFar & 4095) == 0 && hgprog::profiling()) {
-			std::string site = I.getFunction() ? I.getFunction()->getName().str() : "?";
-			if (const auto &loc = I.getDebugLoc())
-				site += ":" + std::to_string(loc.getLine());
-			hgprog::sample(site);
-		}
+		if ((instsSoFar & 4095) == 0 && hgprog::profiling())
+			hgprog::sample(hgprog::siteName(&I));
 		if (!ECStack().empty()) {
 			dynState.globalInstructions[currPos().thread].kind =
 				getInstKind(&*ECStack().back().CurInst);
