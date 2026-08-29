@@ -64,6 +64,17 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 				  << "\n";
 			if (hgprog::state().stackDump)
 				std::cerr << "  reader's frames, innermost first:\n" << hgprog::state().stackDump();
+			/* Every write in the graph within 32 bytes of the address, so the object the
+			 * reader holds can be told from one that was never written there. */
+			std::cerr << "  writes within 32 bytes of the address:\n";
+			for (const auto &l : labels()) {
+				const auto *w = llvm::dyn_cast<WriteLabel>(&l);
+				if (!w) continue;
+				const auto a = w->getAddr().get(), b = access.addr.get();
+				if (a + 32 < b || a > b + 32) continue;
+				std::cerr << "    (" << w->getPos().thread << ", " << w->getPos().index
+					  << ") addr " << a << " width " << w->getSize().get() << "\n";
+			}
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
 		auto val = (access.addr.isDynamic() && !initVals_.contains(access.addr))
