@@ -28,7 +28,15 @@
 
 	/* Special case for initializer */
 	if (lab->getPos().isInitializer()) {
-		VERIFY(!(haveNAs_ && access.addr.isDynamic()));
+		/* A heap location no write in the graph covers, read while non-atomic accesses
+		 * are tracked: a read of uninitialised memory that reached value resolution.
+		 * Reported with the address, where an internal check named nothing. */
+		if (haveNAs_ && access.addr.isDynamic()) {
+			std::cerr << "Read of uninitialised heap memory during value resolution: address "
+				  << access.addr.get() << " width " << access.size.get() << " at event ("
+				  << lab->getPos().thread << ", " << lab->getPos().index << ")\n";
+			ERROR("Read of uninitialised heap memory during value resolution\n");
+		}
 		auto val = access.addr.isDynamic() ? SVal(0) : getInitVal(access);
 		/* TODO (WRD): View{} assumes the graph is complete here */
 		return haveNAs_ ? val : state.reconstructMemValue(access, View{}, val);
