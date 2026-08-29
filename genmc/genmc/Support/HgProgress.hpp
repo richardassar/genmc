@@ -65,9 +65,16 @@ inline State &state()
 }
 
 inline bool enabled() { return std::getenv("HG_GENMC_PROGRESS") != nullptr; }
+inline std::string profileTable(size_t n);
+
 inline bool profiling()
 {
-	static const bool on = std::getenv("HG_GENMC_PROFILE") != nullptr;
+	static const bool on = [] {
+		const bool v = std::getenv("HG_GENMC_PROFILE") != nullptr;
+		if (v)
+			std::atexit([] { std::cerr << "HG-PROFILE at exit: [" << profileTable(12) << "]\n"; });
+		return v;
+	}();
 	return on;
 }
 
