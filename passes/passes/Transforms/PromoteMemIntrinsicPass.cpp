@@ -477,6 +477,79 @@ static void removePromoted(std::ranges::input_range auto &&promoted)
 	}
 }
 
+/* A mem intrinsic whose length is not a constant, and every memmove, becomes a byte loop:
+ *
+ *     i = 0
+ *   hdr: if (i < len) goto body else goto post
+ *   body: dst[k] = (memset ? val : src[k]), where k = i, or len-1-i when a memmove's
+ *         destination starts inside its source; i = i + 1; goto hdr
+ *
+ * Each iteration is one load and one store the checker models like any other access, and the
+ * loop is bounded like every other loop. Without this the intrinsic reached the interpreter,
+ * whose memset()/memcpy() handlers are an unconditional error (they cannot know the width of
+ * the accesses that follow), and a program with a single runtime-length memset -- a vector
+ * assign, a bitset clear -- could not be explored past it. Measured on a hypergraph rewriting
+ * engine: the composed program stopped at "Invalid call to memset()" inside its first rewrite.
+ */
+static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8> &promoted) -> bool
+{
+	auto &ctx = MI->getContext();
+	auto *F = MI->getFunction();
+	auto *len = MI->getLength();
+	auto *lenTy = len->getType();
+	auto *i8Ty = IntegerType::getInt8Ty(ctx);
+	auto *dst = MI->getRawDest();
+	Value *src = nullptr;
+	if (auto *MT = dyn_cast<MemTransferInst>(MI))
+		src = MT->getRawSource();
+	const bool backwardIfOverlapping = isa<MemMoveInst>(MI);
+
+	BasicBlock *pre = MI->getParent();
+	BasicBlock *post = pre->splitBasicBlock(MI, "memintr.post");
+	BasicBlock *hdr = BasicBlock::Create(ctx, "memintr.hdr", F, post);
+	BasicBlock *body = BasicBlock::Create(ctx, "memintr.body", F, post);
+
+	pre->getTerminator()->eraseFromParent();
+	IRBuilder<> b(pre);
+	Value *backward = nullptr;
+	if (backwardIfOverlapping) {
+		/* dst inside [src, src+len): copy from the top down so no byte is overwritten
+		 * before it is read */
+		auto *dstI = b.CreatePtrToInt(dst, lenTy);
+		auto *srcI = b.CreatePtrToInt(src, lenTy);
+		auto *srcEnd = b.CreateAdd(srcI, len);
+		backward = b.CreateAnd(b.CreateICmpUGT(dstI, srcI), b.CreateICmpULT(dstI, srcEnd));
+	}
+	b.CreateBr(hdr);
+
+	b.SetInsertPoint(hdr);
+	auto *i = b.CreatePHI(lenTy, 2, "memintr.i");
+	i->addIncoming(ConstantInt::get(lenTy, 0), pre);
+	b.CreateCondBr(b.CreateICmpULT(i, len), body, post);
+
+	b.SetInsertPoint(body);
+	Value *k = i;
+	if (backward) {
+		auto *fromTop = b.CreateSub(b.CreateSub(len, ConstantInt::get(lenTy, 1)), i);
+		k = b.CreateSelect(backward, fromTop, i);
+	}
+	auto *dstElem = b.CreateInBoundsGEP(i8Ty, dst, {k}, "memintr.dst");
+	Value *byte = nullptr;
+	if (src) {
+		auto *srcElem = b.CreateInBoundsGEP(i8Ty, src, {k}, "memintr.src");
+		byte = b.CreateLoad(i8Ty, srcElem);
+	} else {
+		byte = b.CreateTrunc(cast<MemSetInst>(MI)->getValue(), i8Ty);
+	}
+	b.CreateStore(byte, dstElem);
+	auto *next = b.CreateAdd(i, ConstantInt::get(lenTy, 1));
+	i->addIncoming(next, body);
+	b.CreateBr(hdr);
+
+	promoted.push_back(MI);
+	return true;
+}
+
 auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager &FAM) -> PreservedAnalyses
 {
 	/* Locate mem intrinsics of interest */
@@ -484,10 +557,22 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager &FAM) -> 
 	auto modified = false;
 
 	modified |= lowerFortifiedCalls(F);
-	for (auto &I : instructions(F)) {
-		if (auto *MI = dyn_cast<MemCpyInst>(&I))
-			modified |= tryPromoteMemCpy(MI, promoted);
-		if (auto *MS = dyn_cast<MemSetInst>(&I))
+	/* Gathered first: the runtime-length promotion splits blocks, which an instruction
+	 * iterator over the function must not see mid-walk. */
+	SmallVector<MemIntrinsic *, 8> found;
+	for (auto &I : instructions(F))
+		if (auto *MI = dyn_cast<MemIntrinsic>(&I))
+			found.push_back(MI);
+	for (auto *MI : found) {
+		if (isa<MemMoveInst>(MI) || !isa<ConstantInt>(MI->getLength())) {
+			if (auto *MC = dyn_cast<MemCpyInst>(MI); MC && MC->getSourceAddressSpace() != MC->getDestAddressSpace())
+				continue;
+			modified |= promoteRuntimeLength(MI, promoted);
+			continue;
+		}
+		if (auto *MC = dyn_cast<MemCpyInst>(MI))
+			modified |= tryPromoteMemCpy(MC, promoted);
+		if (auto *MS = dyn_cast<MemSetInst>(MI))
 			modified |= tryPromoteMemSet(MS, promoted);
 	}
 
