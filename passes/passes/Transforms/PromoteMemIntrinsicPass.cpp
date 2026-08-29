@@ -23,6 +23,10 @@
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
+#include <cstdlib>
+#include <algorithm>
 #include <llvm/IR/Type.h>
 
 #include <ranges>
@@ -504,6 +508,40 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		src = MT->getRawSource();
 	const bool backwardIfOverlapping = isa<MemMoveInst>(MI);
 
+	/* The width of the loop's accesses: the scalar the destination (and source) names, so a
+	 * store here is the width of the load that reads it back -- the same rule the constant
+	 * case follows -- and a copy of n words is n iterations rather than 8n. A byte loop over
+	 * the remainder covers a length that is not a multiple of the width. */
+	const auto &DL = F->getParent()->getDataLayout();
+	auto scalarWidth = [&](Value *op) -> uint64_t {
+		if (!op || !isPromotableMemIntrinsicOperand(op))
+			return 0;
+		Type *t = getPromotionGEPType(op);
+		while (auto *at = dyn_cast<ArrayType>(t))
+			t = at->getElementType();
+		if (!t->isIntegerTy() && !t->isPointerTy())
+			return 0;
+		const auto w = DL.getTypeStoreSize(t).getFixedValue();
+		return (w == 1 || w == 2 || w == 4 || w == 8) ? w : 0;
+	};
+	uint64_t w = scalarWidth(dst);
+	if (src) {
+		const auto ws = scalarWidth(src);
+		if (w == 0) w = ws;
+		else if (ws != 0 && ws != w) w = 1;
+	}
+	if (w == 0) {
+		/* Operands the pass cannot see through (parameters, phis, call results): the
+		 * alignment the intrinsic asserts is the element width clang gives a copy of
+		 * T[n] -- alignof(T) -- capped at a word and at both operands' alignments. */
+		uint64_t a = MI->getDestAlign().valueOrOne().value();
+		if (auto *MT = dyn_cast<MemTransferInst>(MI))
+			a = std::min<uint64_t>(a, MT->getSourceAlign().valueOrOne().value());
+		w = std::min<uint64_t>(a, 8);
+		while (w > 1 && (w & (w - 1)) != 0) --w;
+	}
+	auto *elemTy = IntegerType::get(ctx, 8 * static_cast<unsigned>(w));
+
 	BasicBlock *pre = MI->getParent();
 	BasicBlock *post = pre->splitBasicBlock(MI, "memintr.post");
 	BasicBlock *hdr = BasicBlock::Create(ctx, "memintr.hdr", F, post);
@@ -520,31 +558,66 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		auto *srcEnd = b.CreateAdd(srcI, len);
 		backward = b.CreateAnd(b.CreateICmpUGT(dstI, srcI), b.CreateICmpULT(dstI, srcEnd));
 	}
+
+	/* Two loops: `words` elements of width w, then the byte remainder. Each is the same
+	 * shape: hdr tests i < count, body moves element k and advances. */
+	auto *wC = ConstantInt::get(lenTy, w);
+	Value *words = (w == 1) ? len : b.CreateUDiv(len, wC, "memintr.words");
+	Value *tail = (w == 1) ? ConstantInt::get(lenTy, 0)
+			       : b.CreateSub(len, b.CreateMul(words, wC), "memintr.tail");
+	/* The pattern of a memset at width w: the byte replicated */
+	Value *setVal = nullptr, *setByte = nullptr;
+	if (!src) {
+		setByte = b.CreateTrunc(cast<MemSetInst>(MI)->getValue(), i8Ty);
+		Value *wide = b.CreateZExt(setByte, elemTy);
+		setVal = wide;
+		for (uint64_t k = 1; k < w; ++k)
+			setVal = b.CreateOr(setVal, b.CreateShl(wide, ConstantInt::get(elemTy, 8 * k)));
+	}
+	BasicBlock *tailHdr = BasicBlock::Create(ctx, "memintr.tail.hdr", F, post);
+	BasicBlock *tailBody = BasicBlock::Create(ctx, "memintr.tail.body", F, post);
+	/* Everything the loops read from `pre` is computed before its branch. */
+	Value *tailOff = (w == 1) ? nullptr : b.CreateMul(words, wC);
 	b.CreateBr(hdr);
 
-	b.SetInsertPoint(hdr);
-	auto *i = b.CreatePHI(lenTy, 2, "memintr.i");
-	i->addIncoming(ConstantInt::get(lenTy, 0), pre);
-	b.CreateCondBr(b.CreateICmpULT(i, len), body, post);
-
-	b.SetInsertPoint(body);
-	Value *k = i;
-	if (backward) {
-		auto *fromTop = b.CreateSub(b.CreateSub(len, ConstantInt::get(lenTy, 1)), i);
-		k = b.CreateSelect(backward, fromTop, i);
-	}
-	auto *dstElem = b.CreateInBoundsGEP(i8Ty, dst, {k}, "memintr.dst");
-	Value *byte = nullptr;
-	if (src) {
-		auto *srcElem = b.CreateInBoundsGEP(i8Ty, src, {k}, "memintr.src");
-		byte = b.CreateLoad(i8Ty, srcElem);
+	auto emitLoop = [&](BasicBlock *h, BasicBlock *bd, BasicBlock *from, BasicBlock *to, Value *count,
+			    Type *ty, Value *base, Value *val, uint64_t width, Value *byteOffset) {
+		IRBuilder<> lb(h);
+		auto *i = lb.CreatePHI(lenTy, 2, "memintr.i");
+		i->addIncoming(ConstantInt::get(lenTy, 0), from);
+		lb.CreateCondBr(lb.CreateICmpULT(i, count), bd, to);
+		lb.SetInsertPoint(bd);
+		Value *k = i;
+		if (backward) {
+			auto *fromTop = lb.CreateSub(lb.CreateSub(count, ConstantInt::get(lenTy, 1)), i);
+			k = lb.CreateSelect(backward, fromTop, i);
+		}
+		/* byte address = base + byteOffset + k * width, indexed in units of the type */
+		Value *dstBase = byteOffset ? lb.CreateInBoundsGEP(i8Ty, dst, {byteOffset}) : dst;
+		auto *dstElem = lb.CreateInBoundsGEP(ty, dstBase, {k}, "memintr.dst");
+		Value *v = val;
+		if (src) {
+			Value *srcBase = byteOffset ? lb.CreateInBoundsGEP(i8Ty, src, {byteOffset}) : src;
+			auto *srcElem = lb.CreateInBoundsGEP(ty, srcBase, {k}, "memintr.src");
+			v = lb.CreateLoad(ty, srcElem);
+		}
+		lb.CreateStore(v, dstElem);
+		i->addIncoming(lb.CreateAdd(i, ConstantInt::get(lenTy, 1)), bd);
+		lb.CreateBr(h);
+		(void)base; (void)width;
+	};
+	/* The word loop: memmove copies from the top when overlapping, so its index runs down;
+	 * the tail follows the words either way, at offset words*w. */
+	emitLoop(hdr, body, pre, tailHdr, words, elemTy, dst, setVal, w, nullptr);
+	if (w == 1) {
+		/* No tail: the word loop was the whole copy */
+		IRBuilder<> tb(tailHdr);
+		tb.CreateBr(post);
+		IRBuilder<> tbb(tailBody);
+		tbb.CreateUnreachable();
 	} else {
-		byte = b.CreateTrunc(cast<MemSetInst>(MI)->getValue(), i8Ty);
+		emitLoop(tailHdr, tailBody, hdr, post, tail, i8Ty, dst, setByte, 1, tailOff);
 	}
-	b.CreateStore(byte, dstElem);
-	auto *next = b.CreateAdd(i, ConstantInt::get(lenTy, 1));
-	i->addIncoming(next, body);
-	b.CreateBr(hdr);
 
 	promoted.push_back(MI);
 	return true;
@@ -564,8 +637,19 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager &FAM) -> 
 		if (auto *MI = dyn_cast<MemIntrinsic>(&I))
 			found.push_back(MI);
 	for (auto *MI : found) {
-		if (isa<MemMoveInst>(MI) || !isa<ConstantInt>(MI->getLength())) {
-			if (auto *MC = dyn_cast<MemCpyInst>(MI); MC && MC->getSourceAddressSpace() != MC->getDestAddressSpace())
+		/* The loop form covers what the typed promotion cannot: a runtime length, a memmove,
+		 * a memcpy whose operands are both opaque, a memset whose destination is opaque and
+		 * whose value or length is not a constant. Left alone, each reaches the
+		 * interpreter's handler, which is an unconditional error. */
+		auto *MC = dyn_cast<MemCpyInst>(MI);
+		auto *MS = dyn_cast<MemSetInst>(MI);
+		const bool constLen = isa<ConstantInt>(MI->getLength());
+		const bool opaqueCpy = MC && !isPromotableMemIntrinsicOperand(MC->getDest()) &&
+				       !isPromotableMemIntrinsicOperand(MC->getSource());
+		const bool opaqueSet = MS && !isPromotableMemIntrinsicOperand(MS->getDest()) &&
+				       !(constLen && isa<ConstantInt>(MS->getValue()));
+		if (isa<MemMoveInst>(MI) || !constLen || opaqueCpy || opaqueSet) {
+			if (MC && MC->getSourceAddressSpace() != MC->getDestAddressSpace())
 				continue;
 			modified |= promoteRuntimeLength(MI, promoted);
 			continue;
@@ -578,5 +662,11 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager &FAM) -> 
 
 	/* Erase promoted intrinsics from the code */
 	removePromoted(promoted);
+	if (std::getenv("HG_GENMC_VERIFY_IR") && llvm::verifyFunction(F, &llvm::errs())) {
+		llvm::errs() << "PromoteMemIntrinsicPass: malformed IR in " << F.getName() << "\n";
+		std::error_code ec;
+		llvm::raw_fd_ostream os("/tmp/malformed_fn.ll", ec);
+		F.print(os);
+	}
 	return modified ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
