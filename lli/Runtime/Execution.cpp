@@ -3627,6 +3627,28 @@ void Interpreter::runAtExitHandlers()
 	setProgramState(oldState);
 }
 
+/* The instruction the interpreter is executing, for the report a checker-side stop leaves
+ * behind: at exit, under HG_GENMC_PROFILE, its function and source line are printed, which
+ * is the site of the access an internal stop was resolving. */
+static std::atomic<const llvm::Instruction *> &hgLastInst()
+{
+	static std::atomic<const llvm::Instruction *> inst{nullptr};
+	static const bool registered = [] {
+		if (std::getenv("HG_GENMC_PROFILE"))
+			std::atexit([] {
+				const auto *I = inst.load(std::memory_order_relaxed);
+				if (!I) return;
+				std::string site = I->getFunction() ? I->getFunction()->getName().str() : "?";
+				if (const auto &loc = I->getDebugLoc())
+					site += ":" + std::to_string(loc.getLine());
+				std::cerr << "HG-LAST-INSTRUCTION at exit: " << site << "\n";
+			});
+		return true;
+	}();
+	(void)registered;
+	return inst;
+}
+
 void Interpreter::run()
 {
 	auto tid = driver->scheduleNext(dynState.globalInstructions);
@@ -3634,6 +3656,7 @@ void Interpreter::run()
 		scheduleThread(std::get<int>(tid));
 		llvm::ExecutionContext &SF = ECStack().back();
 		llvm::Instruction &I = *SF.CurInst++;
+		hgLastInst().store(&I, std::memory_order_relaxed);
 		visit(I);
 		const auto instsSoFar =
 			hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);

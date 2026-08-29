@@ -14,6 +14,8 @@
 #include "genmc/Execution/EventLabel.hpp"
 #include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
 #include "genmc/Execution/ExecutionGraph.hpp"
+#include <cstdlib>
+#include <iostream>
 #include "genmc/Support/ModuleVarID.hpp"
 #include "genmc/Support/SExprVisitor.hpp"
 
@@ -23,6 +25,15 @@ SVal EventLabel::getAccessValue(const AAccess &access) const
 
 	VERIFY(getPos().isInitializer() || genmc::isa<MemAccessLabel>(this));
 	const auto *rLab = genmc::dyn_cast<ReadLabel>(this);
+	/* A read of a heap location no write covers, while non-atomic accesses are tracked:
+	 * the report below names the READER and the interpreter's exit report names the
+	 * instruction being executed (HG_GENMC_PROFILE); resolveAccessValue then stops. */
+	if (rLab && rLab->getRf() && rLab->getRf()->getPos().isInitializer() && access.addr.isDynamic() &&
+	    g.hasNAs()) {
+		std::cerr << "Read of uninitialised heap memory: reader at (" << getPos().thread << ", "
+			  << getPos().index << ") address " << access.addr.get() << " width "
+			  << access.size.get() << "\n";
+	}
 	return g.resolveAccessValue(rLab ? rLab->getRf() : this, access);
 }
 
