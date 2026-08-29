@@ -3482,8 +3482,15 @@ void Interpreter::run()
 		llvm::ExecutionContext &SF = ECStack().back();
 		llvm::Instruction &I = *SF.CurInst++;
 		visit(I);
-		hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);
+		const auto instsSoFar =
+			hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);
 		hgprog::state().instsTotal.fetch_add(1, std::memory_order_relaxed);
+		if ((instsSoFar & 4095) == 0 && hgprog::profiling()) {
+			std::string site = I.getFunction() ? I.getFunction()->getName().str() : "?";
+			if (const auto &loc = I.getDebugLoc())
+				site += ":" + std::to_string(loc.getLine());
+			hgprog::sample(site);
+		}
 		if (!ECStack().empty()) {
 			dynState.globalInstructions[currPos().thread].kind =
 				getInstKind(&*ECStack().back().CurInst);
