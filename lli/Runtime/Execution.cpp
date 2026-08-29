@@ -3626,6 +3626,11 @@ void Interpreter::run()
 		visit(I);
 		const auto instsSoFar =
 			hgprog::state().instsThisExec.fetch_add(1, std::memory_order_relaxed);
+		{
+			const auto t = static_cast<size_t>(currPos().thread);
+			if (t < hgprog::State::kThreads)
+				hgprog::state().threadInsts[t].fetch_add(1, std::memory_order_relaxed);
+		}
 		hgprog::state().instsTotal.fetch_add(1, std::memory_order_relaxed);
 		if ((instsSoFar & 4095) == 0 && hgprog::profiling()) {
 			std::string site = I.getFunction() ? I.getFunction()->getName().str() : "?";

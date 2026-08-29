@@ -218,6 +218,7 @@ static void reconstructState(ExecutionGraph &g, ExecutionState &state)
 
 bool GenMCDriver::handleExecutionStart()
 {
+	hgprog::state().starts.fetch_add(1, std::memory_order_relaxed);
 	auto &g = getExec().getGraph();
 	auto &state = getExec().getGraph().getState();
 
@@ -371,6 +372,7 @@ auto GenMCDriver::handleExecutionEnd() -> std::optional<VerificationError>
 	hgprog::state().explored.store(result.explored, std::memory_order_relaxed);
 	hgprog::state().blocked.store(result.exploredBlocked, std::memory_order_relaxed);
 	hgprog::state().instsThisExec.store(0, std::memory_order_relaxed);
+	for (auto &t : hgprog::state().threadInsts) t.store(0, std::memory_order_relaxed);
 	/* Progress, when asked for: how many executions so far, how large this one was, and the
 	 * rate -- the numbers that let a run on a large module be extrapolated or abandoned. */
 	if (const char *hgProg = std::getenv("HG_GENMC_PROGRESS")) {

@@ -50,6 +50,12 @@ struct State {
 	// spends its instructions -- the loop that iterates to the bound, not a guess about it.
 	std::map<std::string, uint64_t> profile;        // guarded by mtx
 	uint64_t profileSamples{0};                     // guarded by mtx
+	// Executions started (each replay of a revisit is one), and the instructions each thread
+	// has interpreted since the last completed execution: a first execution that never
+	// completes is then attributed to the thread that runs it.
+	std::atomic<uint64_t> starts{0};
+	static constexpr size_t kThreads = 64;
+	std::atomic<uint64_t> threadInsts[kThreads] = {};
 };
 
 inline State &state()
@@ -209,6 +215,12 @@ inline void heartbeat()
 			  << " insts_this_exec=" << s.instsThisExec.load(std::memory_order_relaxed)
 			  << " insts_total=" << s.instsTotal.load(std::memory_order_relaxed)
 			  << " elapsed_s=" << secs << " rate_per_s=" << (secs > 0 ? n / secs : 0.0);
+		std::cerr << " starts=" << s.starts.load(std::memory_order_relaxed) << " thread_insts=[";
+		for (size_t t = 0; t < State::kThreads; ++t) {
+			const auto v = s.threadInsts[t].load(std::memory_order_relaxed);
+			if (v) std::cerr << t << ":" << v << " ";
+		}
+		std::cerr << "]";
 		if (profiling())
 			std::cerr << " profile=[" << profileTable(8) << "]";
 	}
