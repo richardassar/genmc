@@ -393,6 +393,18 @@ void printLLVMModule(llvm::Module &mod, const std::string &filename)
 	/* A ".bc" name writes bitcode: it round-trips exactly and parses in seconds, where the
 	 * textual form of a multi-gigabyte module emits block labels its own reader rejects. */
 	if (filename.size() > 3 && filename.compare(filename.size() - 3, 3, ".bc") == 0) {
+		/* Block and value names that the transformation has grown by repeated splitting
+		 * (".loopexit.split-lp.loopexit.split-lp...", kilobytes long on a large module)
+		 * are rejected by LLVM's own reader in either format. A saved module is re-fed for
+		 * exploration, which needs no local names, so any name past a page is dropped. */
+		for (auto &F : mod)
+			for (auto &BB : F) {
+				if (BB.getName().size() > 4096)
+					BB.setName("");
+				for (auto &I : BB)
+					if (I.hasName() && I.getName().size() > 4096)
+						I.setName("");
+			}
 		llvm::WriteBitcodeToFile(mod, *out);
 		return;
 	}
