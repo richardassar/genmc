@@ -650,6 +650,8 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager & /*FAM*/
 		const bool opaqueSet = MS && !isPromotableMemIntrinsicOperand(MS->getDest()) &&
 				       !(constLen && isa<ConstantInt>(MS->getValue()));
 		if (isa<MemMoveInst>(MI) || !constLen || opaqueCpy || opaqueSet) {
+			if (!lowerOpaque_)
+				continue; /* the second instance, after SROA and mem2reg */
 			if (MC && MC->getSourceAddressSpace() != MC->getDestAddressSpace())
 				continue;
 			modified |= promoteRuntimeLength(MI, promoted);
