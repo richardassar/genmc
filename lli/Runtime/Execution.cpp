@@ -3665,6 +3665,19 @@ static void hgRegisterLastInstructionReport()
 void Interpreter::run()
 {
 	hgRegisterLastInstructionReport();
+	/* The executing thread's frames, innermost first, for the reports raised below the
+	 * interpreter: each frame is named by the instruction it is at. */
+	hgprog::state().stackDump = [this]() {
+		std::string out;
+		const auto &stack = ECStack();
+		for (size_t i = stack.size(); i-- > 0;) {
+			const llvm::Instruction *I = stack[i].CurInst == stack[i].CurBB->end()
+							     ? nullptr
+							     : &*stack[i].CurInst;
+			out += "    " + hgprog::siteName(I) + "\n";
+		}
+		return out;
+	};
 	auto tid = driver->scheduleNext(dynState.globalInstructions);
 	while (std::holds_alternative<int>(tid)) {
 		scheduleThread(std::get<int>(tid));
