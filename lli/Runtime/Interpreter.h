@@ -497,6 +497,7 @@ public:
 	void visitCallInstWrapper(CallInstWrapper CIW);
 	void visitCallBase(CallBase &CB) { visitCallInstWrapper(CallInstWrapper(CB)); }
 	void visitUnreachableInst(UnreachableInst &I);
+	void visitFreezeInst(FreezeInst &I);
 
 	void visitShl(BinaryOperator &I);
 	void visitLShr(BinaryOperator &I);

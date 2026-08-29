@@ -1298,6 +1298,17 @@ void Interpreter::visitReturnInst(ReturnInst &I)
 	popStackAndReturnValueToCaller(RetTy, Result, &I);
 }
 
+/* freeze yields its operand: the interpreter's values are never poison, so the instruction
+ * that LLVM's own loop passes insert when they hoist a condition (a loop whose bound is a
+ * runtime value, once the mem-intrinsic promotion emits one) is the identity here. */
+void Interpreter::visitFreezeInst(FreezeInst &I)
+{
+	ExecutionContext &SF = ECStack().back();
+	GenericValue V = getOperandValue(I.getOperand(0), SF);
+	updateDataDeps(getCurThr().id, &I, I.getOperand(0));
+	SetValue(&I, V, SF);
+}
+
 void Interpreter::visitUnreachableInst(UnreachableInst &I)
 {
 	report_fatal_error("Program executed an 'unreachable' instruction!");
