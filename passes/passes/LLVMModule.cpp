@@ -55,6 +55,7 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
@@ -76,6 +77,13 @@ auto parseLLVMModule(const std::string &filename, const std::unique_ptr<llvm::LL
 	-> std::unique_ptr<llvm::Module>
 {
 	llvm::SMDiagnostic err;
+
+	/* A saved module of a large program carries block names that repeated splitting has
+	 * grown past the reader's 1024-byte default (-non-global-value-max-name-size), and the
+	 * reader refuses the file. It is told the size to accept before it opens one. */
+	auto &opts = llvm::cl::getRegisteredOptions();
+	if (auto it = opts.find("non-global-value-max-name-size"); it != opts.end())
+		it->second->addOccurrence(0, "non-global-value-max-name-size", "1048576");
 
 	auto mod = llvm::parseIRFile(filename, err, *ctx);
 	if (!mod) {
