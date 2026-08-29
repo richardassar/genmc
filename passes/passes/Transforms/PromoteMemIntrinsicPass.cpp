@@ -11,6 +11,7 @@
  *     https://opensource.org/licenses/MIT
  */
 
+#include <llvm/IR/Operator.h>
 #include "PromoteMemIntrinsicPass.hpp"
 #include "genmc/Support/Error.hpp"
 
@@ -145,31 +146,29 @@ static auto lowerFortifiedCalls(Function &F) -> bool
 	return modified;
 }
 
-static auto isPromotableMemIntrinsicOperand(Value *op) -> bool
-{
-	/* Constant to capture MemSet too */
-	return isa<Constant>(op) || isa<AllocaInst>(op) || isa<GetElementPtrInst>(op);
-}
-
+/* The type an operand names, or null when the pass cannot type it: a global, an alloca, or a
+ * GEP -- instruction or constant expression -- whose all-zero indices name the object it
+ * indexes into (`getelementptr [2 x i32], ptr %a, i64 0, i64 0` is the array; promoting by its
+ * result element type would copy one element of several) and whose other indices name the
+ * member. A null, an undef, a cast expression, a load, a call result or a parameter has no
+ * type here, and an intrinsic over it is lowered to a loop instead. */
 static auto getPromotionGEPType(Value *op) -> Type *
 {
-	VERIFY(isPromotableMemIntrinsicOperand(op));
 	if (auto *v = dyn_cast<GlobalVariable>(op))
 		return v->getValueType();
 	if (auto *ai = dyn_cast<AllocaInst>(op))
 		return ai->getAllocatedType();
-	if (auto *gepi = dyn_cast<GetElementPtrInst>(op)) {
-		/* A GEP whose indices are all zero names the object it indexes into, not a
-		 * member of it: `getelementptr [2 x i32], ptr %a, i64 0, i64 0` is the array,
-		 * and a memcpy of the whole array through it must be promoted field by field
-		 * over the array's type. Its result element type (i32 here) is only the first
-		 * element, and promoting by that either trips typeSizeDst >= len or copies one
-		 * element of several. */
-		if (gepi->hasAllZeroIndices())
-			return gepi->getSourceElementType();
-		return gepi->getResultElementType();
+	if (auto *gep = dyn_cast<GEPOperator>(op)) {
+		if (gep->hasAllZeroIndices())
+			return gep->getSourceElementType();
+		return gep->getResultElementType();
 	}
-	UNREACHABLE();
+	return nullptr;
+}
+
+static auto isPromotableMemIntrinsicOperand(Value *op) -> bool
+{
+	return getPromotionGEPType(op) != nullptr;
 }
 
 /* The type a mem intrinsic of `len` bytes is promoted over, given the type its destination
@@ -513,6 +512,8 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		if (!op || !isPromotableMemIntrinsicOperand(op))
 			return 0;
 		Type *t = getPromotionGEPType(op);
+		if (!t)
+			return 0;
 		while (auto *at = dyn_cast<ArrayType>(t))
 			t = at->getElementType();
 		if (!t->isIntegerTy() && !t->isPointerTy())
