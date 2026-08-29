@@ -395,14 +395,14 @@ void printLLVMModule(llvm::Module &mod, const std::string &filename)
 	if (filename.size() > 3 && filename.compare(filename.size() - 3, 3, ".bc") == 0) {
 		/* Block and value names that the transformation has grown by repeated splitting
 		 * (".loopexit.split-lp.loopexit.split-lp...", kilobytes long on a large module)
-		 * are rejected by LLVM's own reader in either format. A saved module is re-fed for
-		 * exploration, which needs no local names, so any name past a page is dropped. */
+		 * are rejected by LLVM's textual reader past 1024 bytes
+		 * (-non-global-value-max-name-size), and a re-fed module passes through that
+		 * reader. Exploration needs no local names, so every one of them is dropped. */
 		for (auto &F : mod)
 			for (auto &BB : F) {
-				if (BB.getName().size() > 4096)
-					BB.setName("");
+				BB.setName("");
 				for (auto &I : BB)
-					if (I.hasName() && I.getName().size() > 4096)
+					if (I.hasName())
 						I.setName("");
 			}
 		llvm::WriteBitcodeToFile(mod, *out);
