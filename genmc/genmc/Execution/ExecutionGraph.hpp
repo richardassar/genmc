@@ -988,6 +988,7 @@ public:
 	}
 	auto containsLoc(SAddr addr) const -> bool { return coherence.contains(addr); }
 
+	[[nodiscard]] auto hasNAs() const -> bool { return haveNAs_; }
 	[[nodiscard]] auto resolveAccessValue(const EventLabel *lab, const AAccess &access) const
 		-> SVal;
 
