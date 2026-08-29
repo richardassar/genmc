@@ -47,6 +47,13 @@ public:
 
 	void cut(const VectorClock &v);
 
+	/** The number of alternatives registered for E (0 when E is not registered) */
+	[[nodiscard]] auto sizeOf(Event e) const -> size_t
+	{
+		auto it = cmap_.find(e);
+		return it == cmap_.end() ? 0 : it->second.size();
+	}
+
 private:
 	std::unordered_map<Event, VSet<Event>> cmap_;
 };

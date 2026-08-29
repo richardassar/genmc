@@ -14,6 +14,7 @@
 #include "Runtime/Interpreter.h"
 #include "passes/LLIConfig.hpp"
 #include "passes/LLVMModule.hpp"
+#include "genmc/Support/HgProgress.hpp"
 #include "genmc/lli_config.h"
 #include "genmc/Support/Error.hpp"
 #include "genmc/Support/Logger.hpp"
@@ -734,11 +735,16 @@ static void printEstimationResults(const std::shared_ptr<const Config> &conf,
 	      (!res.status.has_value() ? "*** Estimation complete"
 				       : "\n*** Estimation unsuccessful"));
 
-	long long mean = std::llround(res.estimationMean);
-	long long sd = std::llround(std::sqrt(res.estimationVariance));
+	const long double mean = res.estimationMean;
+	const long double sd = std::sqrt(res.estimationVariance);
 	auto meanTimeSecs = getElapsedSecs(begin) / (res.explored + res.exploredBlocked);
-	PRINT(VerbosityLevel::Error, "Total executions estimate: {} (+- {})\n", mean, sd);
-	PRINT(VerbosityLevel::Error, "Time to completion estimate: {:.2f}s\n", meanTimeSecs * mean);
+	PRINT(VerbosityLevel::Error, "Total executions estimate: {:.4Le} (+- {:.4Le}) = 2^{:.1Lf}\n",
+	      mean, sd, std::log2(mean));
+	const long double secs = meanTimeSecs * mean;
+	PRINT(VerbosityLevel::Error, "Time to completion estimate: {:.2Le}s = {:.3Le} years\n", secs,
+	      secs / (365.25L * 86400.0L));
+	if (hgprog::enabled())
+		std::cerr << hgprog::choiceTable(30);
 	GENMC_DEBUG(if (conf->printEstimationStats) {
 		PRINT(VerbosityLevel::Error, "Estimation moot: {}\n", res.exploredMoot);
 		PRINT(VerbosityLevel::Error, "Estimation blocked: {}\n", res.exploredBlocked);

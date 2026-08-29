@@ -9,6 +9,9 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <string>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +23,10 @@
 #include <mutex>
 #include <string>
 #include <thread>
+
+namespace llvm {
+class Instruction;
+}
 
 namespace hgprog {
 
@@ -56,7 +63,25 @@ struct State {
 	std::atomic<uint64_t> starts{0};
 	static constexpr size_t kThreads = 64;
 	std::atomic<uint64_t> threadInsts[kThreads] = {};
+	// The instruction the interpreter is executing.
+	std::atomic<const llvm::Instruction *> curInst{nullptr};
+	// Choice attribution (estimation mode). The state-space estimate of an execution is the
+	// product, over its reads and writes, of the number of alternatives each one has; every
+	// alternative set larger than one is booked here against the site of the instruction
+	// being interpreted, weighted by log2 of its size, so the table at the end names where
+	// the estimate comes from. A store that becomes a new alternative for earlier loads is
+	// booked at the store's site with the log2 growth it causes.
+	std::map<std::string, std::pair<uint64_t, double>> choices; // site -> (count, sum log2); mtx
+	uint64_t execChoicePoints{0};                                // this execution; mtx
+	double execChoiceLog2{0};                                    // this execution; mtx
+	uint64_t log2Samples{0};                                     // Welford over executions; mtx
+	long double log2Mean{0}, log2M2{0};                          // of log2(sample); mtx
+	long double residualSum{0};                                  // |log2 sample - booked|; mtx
+	uint64_t choicePointsSum{0};                                 // over executions; mtx
 };
+
+/* The function and source line of an instruction, "fn[:line]"; defined by the interpreter. */
+std::string siteName(const llvm::Instruction *I);
 
 inline State &state()
 {
@@ -84,6 +109,87 @@ inline void sample(const std::string &site)
 	std::lock_guard<std::mutex> g(s.mtx);
 	++s.profile[site];
 	++s.profileSamples;
+}
+
+inline void choice(size_t alternatives)
+{
+	auto &s = state();
+	const auto *I = s.curInst.load(std::memory_order_relaxed);
+	const double w = std::log2(static_cast<double>(alternatives));
+	std::lock_guard<std::mutex> g(s.mtx);
+	auto &e = s.choices[siteName(I)];
+	++e.first;
+	e.second += w;
+	++s.execChoicePoints;
+	s.execChoiceLog2 += w;
+}
+
+inline void choiceRevisit(double log2Growth)
+{
+	if (log2Growth <= 0)
+		return;
+	auto &s = state();
+	const auto *I = s.curInst.load(std::memory_order_relaxed);
+	std::lock_guard<std::mutex> g(s.mtx);
+	auto &e = s.choices[siteName(I) + " (store revisits earlier loads)"];
+	++e.first;
+	e.second += log2Growth;
+	++s.execChoicePoints;
+	s.execChoiceLog2 += log2Growth;
+}
+
+/* One estimation sample ended: SAMPLE is the product of the alternative counts. */
+inline void endEstimationSample(long double sample)
+{
+	auto &s = state();
+	std::lock_guard<std::mutex> g(s.mtx);
+	const long double l = std::log2(sample);
+	++s.log2Samples;
+	const long double d = l - s.log2Mean;
+	s.log2Mean += d / s.log2Samples;
+	s.log2M2 += d * (l - s.log2Mean);
+	s.residualSum += std::fabs(l - (long double)s.execChoiceLog2);
+	s.choicePointsSum += s.execChoicePoints;
+	s.execChoicePoints = 0;
+	s.execChoiceLog2 = 0;
+}
+
+inline std::string choiceTable(size_t n)
+{
+	auto &s = state();
+	std::vector<std::pair<std::string, std::pair<uint64_t, double>>> v;
+	long double mean = 0, sd = 0, residual = 0;
+	uint64_t samples = 0, points = 0;
+	{
+		std::lock_guard<std::mutex> g(s.mtx);
+		v.assign(s.choices.begin(), s.choices.end());
+		samples = s.log2Samples;
+		mean = s.log2Mean;
+		sd = samples > 1 ? std::sqrt(s.log2M2 / (samples - 1)) : 0;
+		residual = samples ? s.residualSum / samples : 0;
+		points = s.choicePointsSum;
+	}
+	std::sort(v.begin(), v.end(),
+		  [](auto &a, auto &b) { return a.second.second > b.second.second; });
+	double total = 0;
+	for (auto &e : v)
+		total += e.second.second;
+	char buf[256];
+	std::snprintf(buf, sizeof(buf),
+		      "HG-CHOICES samples=%llu log2_mean=%.2Lf log2_sd=%.2Lf booked_residual=%.3Lf "
+		      "choice_points_per_exec=%.1f booked_log2_per_exec=%.2f\n",
+		      (unsigned long long)samples, mean, sd, residual,
+		      samples ? (double)points / samples : 0.0, samples ? total / samples : 0.0);
+	std::string out = buf;
+	for (size_t i = 0; i < v.size() && i < n; ++i) {
+		std::snprintf(buf, sizeof(buf), "HG-CHOICE %6.2f%% log2/exec=%8.2f n/exec=%8.2f %s\n",
+			      total > 0 ? 100.0 * v[i].second.second / total : 0.0,
+			      samples ? v[i].second.second / samples : 0.0,
+			      samples ? (double)v[i].second.first / samples : 0.0,
+			      v[i].first.c_str());
+		out += buf;
+	}
+	return out;
 }
 
 inline std::string profileTable(size_t n)
