@@ -68,7 +68,7 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 			 * reader holds can be told from one that was never written there. */
 			std::cerr << "  writes within 32 bytes of the address:\n";
 			for (const auto &l : labels()) {
-				const auto *w = llvm::dyn_cast<WriteLabel>(&l);
+				const auto *w = genmc::dyn_cast<WriteLabel>(&l);
 				if (!w) continue;
 				const auto a = w->getAddr().get(), b = access.addr.get();
 				if (a + 32 < b || a > b + 32) continue;
