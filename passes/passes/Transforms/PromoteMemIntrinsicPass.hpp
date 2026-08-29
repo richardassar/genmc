@@ -25,7 +25,17 @@ using namespace llvm;
 
 class PromoteMemIntrinsicPass : public PassInfoMixin<PromoteMemIntrinsicPass> {
 public:
+	/* The pass runs twice. The first instance promotes the intrinsics whose operands name a
+	 * type and leaves the rest in place; the second, after SROA and mem2reg have folded
+	 * closure fields and pointer slots into the allocas they held, promotes what became
+	 * typed and lowers whatever is still opaque to a loop at the intrinsic's alignment. A
+	 * copy lowered at alignment width before that folding is read back at its fields'
+	 * widths, and a read inside a wider write is one the checker cannot resolve. */
+	explicit PromoteMemIntrinsicPass(bool lowerOpaque = true) : lowerOpaque_(lowerOpaque) {}
 	auto run(Function &F, FunctionAnalysisManager &FAM) -> PreservedAnalyses;
+
+private:
+	bool lowerOpaque_;
 };
 
 #endif /* GENMC_PROMOTE_MEMINTRINSIC_PASS_HPP */

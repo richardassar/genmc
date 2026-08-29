@@ -307,9 +307,9 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		basicOptsMGR.addPass(FunctionInlinerPass());
 	{
 		llvm::FunctionPassManager fpm;
-		/* Run after the inliner because it might generate new memcpys */
-		fpm.addPass(PromoteMemIntrinsicPass());
-		fpm.addPass(IntrinsicLoweringPass());
+		/* Run after the inliner because it might generate new memcpys. Typed operands only
+		 * here; the opaque ones wait for SROA and mem2reg below. */
+		fpm.addPass(PromoteMemIntrinsicPass(/*lowerOpaque=*/false));
 		if (conf->castElimination)
 			fpm.addPass(EliminateCastsPass());
 #if LLVM_VERSION_MAJOR < 14
@@ -320,6 +320,10 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		fpm.addPass(SROAPass(SROAOptions::PreserveCFG));
 #endif
 		fpm.addPass(PromotePass()); // Mem2Reg
+		/* Now that closure fields and pointer slots are the allocas they held, the copies
+		 * that were opaque above are typed; what is still opaque is lowered to a loop. */
+		fpm.addPass(PromoteMemIntrinsicPass(/*lowerOpaque=*/true));
+		fpm.addPass(IntrinsicLoweringPass());
 		basicOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
 	}
 	basicOptsMGR.addPass(DeadArgumentEliminationPass());

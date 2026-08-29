@@ -43,14 +43,22 @@
 			/* Every write in the graph within 32 bytes of the address, so the object the
 			 * reader holds can be told from one that was never written there. */
 			std::cerr << "  writes within 32 bytes of the address:\n";
+			bool covered = false;
 			for (const auto &l : labels()) {
 				const auto *w = genmc::dyn_cast<WriteLabel>(&l);
 				if (!w) continue;
 				const auto a = w->getAddr().get(), b = access.addr.get();
+				const auto wa = w->getSize().get(), wb = access.size.get();
 				if (a + 32 < b || a > b + 32) continue;
+				if (a <= b && b + wb <= a + wa && (a != b || wa != wb)) covered = true;
 				std::cerr << "    (" << w->getPos().thread << ", " << w->getPos().index
-					  << ") addr " << a << " width " << w->getSize().get() << "\n";
+					  << ") addr " << a << " width " << wa << "\n";
 			}
+			if (covered)
+				std::cerr << "  The read lies inside a wider write: a mixed-size access the "
+					     "checker does not resolve, not a read of unwritten memory. "
+					     "The write is a copy promoted at alignment width; see "
+					     "PromoteMemIntrinsicPass.\n";
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
 		auto val = access.addr.isDynamic() ? SVal(0) : getInitVal(access);
