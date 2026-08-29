@@ -12,6 +12,7 @@
  */
 
 #include "genmc/Execution/ExecutionGraph.hpp"
+#include "genmc/Support/HgProgress.hpp"
 #include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
 
 #include <iostream>
@@ -33,8 +34,10 @@
 		 * Reported with the address, where an internal check named nothing. */
 		if (haveNAs_ && access.addr.isDynamic()) {
 			std::cerr << "Read of uninitialised heap memory during value resolution: address "
-				  << access.addr.get() << " width " << access.size.get() << " at event ("
-				  << lab->getPos().thread << ", " << lab->getPos().index << ")\n";
+				  << access.addr.get() << " width " << access.size.get()
+				  << " reader instruction "
+				  << hgprog::siteName(hgprog::state().curInst.load(std::memory_order_relaxed))
+				  << "\n";
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
 		auto val = access.addr.isDynamic() ? SVal(0) : getInitVal(access);
