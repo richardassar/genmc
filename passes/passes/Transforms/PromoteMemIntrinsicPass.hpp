@@ -14,6 +14,7 @@
 #ifndef GENMC_PROMOTE_MEMINTRINSIC_PASS_HPP
 #define GENMC_PROMOTE_MEMINTRINSIC_PASS_HPP
 
+#include "genmc/ADT/VSet.hpp"
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
@@ -32,10 +33,18 @@ public:
 	 * copy lowered at alignment width before that folding is read back at its fields'
 	 * widths, and a read inside a wider write is one the checker cannot resolve. */
 	explicit PromoteMemIntrinsicPass(bool lowerOpaque = true) : lowerOpaque_(lowerOpaque) {}
+	/* UNROLL and NOUNROLLFUNS are --unroll and --no-unroll: a lowered copy whose loop
+	 * reaches the bound fails an assertion before its first store. */
+	PromoteMemIntrinsicPass(bool lowerOpaque, std::optional<unsigned> unroll,
+				const VSet<std::string> &noUnrollFuns)
+		: lowerOpaque_(lowerOpaque), unroll_(unroll), noUnroll_(noUnrollFuns)
+	{}
 	auto run(Function &F, FunctionAnalysisManager &FAM) -> PreservedAnalyses;
 
 private:
 	bool lowerOpaque_;
+	std::optional<unsigned> unroll_;
+	VSet<std::string> noUnroll_;
 };
 
 #endif /* GENMC_PROMOTE_MEMINTRINSIC_PASS_HPP */

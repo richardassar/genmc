@@ -490,7 +490,8 @@ static void removePromoted(std::ranges::input_range auto &&promoted)
  * assign, a bitset clear -- could not be explored past it. Measured on a hypergraph rewriting
  * engine: the composed program stopped at "Invalid call to memset()" inside its first rewrite.
  */
-static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8> &promoted) -> bool
+static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8> &promoted,
+				 std::optional<unsigned> bound) -> bool
 {
 	auto &ctx = MI->getContext();
 	auto *F = MI->getFunction();
@@ -580,6 +581,36 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 	/* Everything the loops read from `pre` is computed before its branch. */
 	Value *tailOff = (w == 1) ? nullptr : b.CreateMul(words, wC);
 
+	/* LoopUnrollPass (--unroll=N) kills a thread when a loop header is entered for the
+	 * (N+1)th time, which a loop of N or more iterations does. A copy that long fails an
+	 * assertion here, before its first store. */
+	BasicBlock *start = pre;
+	if (bound) {
+		auto *nC = ConstantInt::get(lenTy, *bound);
+		Value *tooLong = b.CreateICmpUGE(words, nC);
+		if (w != 1)
+			tooLong = b.CreateOr(tooLong, b.CreateICmpUGE(tail, nC));
+		BasicBlock *fail = BasicBlock::Create(ctx, "memintr.too.long", F, post);
+		start = BasicBlock::Create(ctx, "memintr.start", F, post);
+		b.CreateCondBr(tooLong, fail, start);
+
+		IRBuilder<> fb(fail);
+		fb.SetCurrentDebugLocation(MI->getDebugLoc());
+		auto *ptrTy = PointerType::getUnqual(ctx);
+		auto assertFail = F->getParent()->getOrInsertFunction(
+			"__VERIFIER_assert_fail",
+			FunctionType::get(Type::getVoidTy(ctx),
+					  {ptrTy, ptrTy, Type::getInt32Ty(ctx)}, false));
+		/* Named: the execution engine maps globals to memory by name, and two unnamed
+		 * globals share one slot. */
+		auto *msg = fb.CreateGlobalString(
+			"a memory intrinsic lowered to a loop is longer than the --unroll bound",
+			"memintr.too.long.msg");
+		fb.CreateCall(assertFail, {msg, msg, ConstantInt::get(Type::getInt32Ty(ctx), 0)});
+		fb.CreateUnreachable();
+		b.SetInsertPoint(start);
+	}
+
 	auto emitLoop = [&](BasicBlock *h, BasicBlock *bd, BasicBlock *from, BasicBlock *to, Value *count,
 			    Type *ty, Value *val, Value *byteOffset, bool down) {
 		IRBuilder<> lb(h);
@@ -613,12 +644,12 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		/* Descending copy, for a destination inside the source: the tail bytes first, then
 		 * the words, each from the top. The word loop's stores cover the tail's source
 		 * bytes, so the tail is read before the words are written. */
-		emitLoop(downTailHdr, downTailBody, pre, downHdr, tail, i8Ty, setByte, tailOff, true);
+		emitLoop(downTailHdr, downTailBody, start, downHdr, tail, i8Ty, setByte, tailOff, true);
 		emitLoop(downHdr, downBody, downTailHdr, post, words, elemTy, setVal, nullptr, true);
 	} else {
 		b.CreateBr(hdr);
 	}
-	emitLoop(hdr, body, pre, tailHdr, words, elemTy, setVal, nullptr, false);
+	emitLoop(hdr, body, start, tailHdr, words, elemTy, setVal, nullptr, false);
 	if (w == 1) {
 		/* No tail: the word loop was the whole copy */
 		IRBuilder<> tb(tailHdr);
@@ -647,6 +678,9 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager & /*FAM*/
 	for (auto &I : instructions(F))
 		if (auto *MI = dyn_cast<MemIntrinsic>(&I))
 			found.push_back(MI);
+	const auto bound = (unroll_ && !noUnroll_.count(F.getName().str()))
+				   ? unroll_
+				   : std::optional<unsigned>();
 	for (auto *MI : found) {
 		/* The loop form covers what the typed promotion cannot: a runtime length, a memmove,
 		 * a memcpy whose operands are both opaque, a memset whose destination is opaque and
@@ -664,7 +698,7 @@ auto PromoteMemIntrinsicPass::run(Function &F, FunctionAnalysisManager & /*FAM*/
 				continue; /* the second instance, after SROA and mem2reg */
 			if (MC && MC->getSourceAddressSpace() != MC->getDestAddressSpace())
 				continue;
-			modified |= promoteRuntimeLength(MI, promoted);
+			modified |= promoteRuntimeLength(MI, promoted, bound);
 			continue;
 		}
 		if (auto *MC = dyn_cast<MemCpyInst>(MI))
