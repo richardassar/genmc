@@ -1027,7 +1027,7 @@ bool GenMCDriver::checkHelpingCasCondition(const HelpingCasLabel *hLab)
 			      auto *rLab = genmc::dyn_cast<HelpedCasReadLabel>(&lab);
 			      return rLab && rLab->isRMW() && rLab->getAddr() == hLab->getAddr() &&
 				     rLab->getSize() == hLab->getSize() &&
-				     rLab->getOrdering() == hLab->getOrdering() &&
+				     rLab->getSuccessOrdering() == hLab->getOrdering() &&
 				     rLab->getExpected() == hLab->getExpected() &&
 				     rLab->getSwapVal() == hLab->getSwapVal();
 		      });
@@ -1101,28 +1101,6 @@ EventLabel *GenMCDriver::findConsistentCo(WriteLabel *wLab, std::vector<EventLab
 			return back;
 	}
 	return nullptr;
-}
-
-void GenMCDriver::noteCasFailure(int tid, MemOrdering failOrd)
-{
-	auto &g = getExec().getGraph();
-	if (g.isThreadEmpty(tid))
-		return;
-	auto *lab = genmc::dyn_cast<CasReadLabel>(g.getLastThreadLabel(tid));
-	if (!lab)
-		return;
-	const auto cur = lab->getOrdering();
-	auto hasAcq = [](MemOrdering o) {
-		return o == MemOrdering::Acquire || o == MemOrdering::AcquireRelease ||
-		       o == MemOrdering::SequentiallyConsistent;
-	};
-	if (!hasAcq(failOrd) || hasAcq(cur))
-		return;
-	/* A failed CAS is a read: Acquire, or SC if the failure ordering is SC */
-	lab->setOrdering(failOrd == MemOrdering::SequentiallyConsistent
-				 ? MemOrdering::SequentiallyConsistent
-				 : MemOrdering::Acquire);
-	updateLabelViews(lab);
 }
 
 auto GenMCDriver::handleThreadKill(std::unique_ptr<ThreadKillLabel> kLab)
@@ -1627,11 +1605,11 @@ GenMCDriver::HandleResult<SVal> GenMCDriver::handleLoad(std::unique_ptr<ReadLabe
 #define HANDLE_CAS_LOAD_LABEL(name)                                                                \
 	GenMCDriver::HandleResult<SVal> GenMCDriver::handle##name(                                 \
 		const EventDbgInfo *dbg, Event pos, GENMC_OLD_VAL_PARAM MemOrdering ord,           \
-		SAddr addr, ASize size, SVal exp, SVal swap, WriteAttr wattr, EventLabel *rfLab,   \
-		std::optional<Annotation> annot, const EventDeps &deps)                            \
+		MemOrdering failOrd, SAddr addr, ASize size, SVal exp, SVal swap, WriteAttr wattr, \
+		EventLabel *rfLab, std::optional<Annotation> annot, const EventDeps &deps)         \
 	{                                                                                          \
-		LOAD_INTERCEPTOR_LOGIC(name##Label, GENMC_OLD_VAL_PASS, ord, addr, size, exp,      \
-				       swap, wattr, rfLab, annot, deps);                           \
+		LOAD_INTERCEPTOR_LOGIC(name##Label, GENMC_OLD_VAL_PASS, ord, failOrd, addr, size,  \
+				       exp, swap, wattr, rfLab, annot, deps);                      \
 	}
 
 #define HANDLE_LOCK_LOAD_LABEL(name)                                                               \

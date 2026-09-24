@@ -968,8 +968,10 @@ public:
 	auto containsLoc(SAddr addr) const -> bool { return coherence.contains(addr); }
 
 	[[nodiscard]] auto hasNAs() const -> bool { return haveNAs_; }
-	[[nodiscard]] auto resolveAccessValue(const EventLabel *lab, const AAccess &access) const
-		-> SVal;
+	/** The value ACCESS reads from LAB. With REPORTUNINIT unset, a read of a heap
+	 * location that no write covers yields 0 and is not reported. */
+	[[nodiscard]] auto resolveAccessValue(const EventLabel *lab, const AAccess &access,
+					      bool reportUninit = true) const -> SVal;
 
 	auto isLocEmpty(SAddr addr) const -> bool
 	{

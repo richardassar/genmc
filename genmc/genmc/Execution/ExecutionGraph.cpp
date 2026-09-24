@@ -23,7 +23,8 @@
  ***********************************************************/
 
 [[nodiscard]] auto ExecutionGraph::resolveAccessValue(const EventLabel *lab,
-						      const AAccess &access) const -> SVal
+						      const AAccess &access, bool reportUninit) const
+	-> SVal
 {
 	auto &state = getState();
 
@@ -32,7 +33,7 @@
 		/* A heap location no write in the graph covers, read while non-atomic accesses
 		 * are tracked: a read of uninitialised memory that reached value resolution.
 		 * Reported with the address, where an internal check named nothing. */
-		if (haveNAs_ && access.addr.isDynamic()) {
+		if (reportUninit && haveNAs_ && access.addr.isDynamic()) {
 			std::cerr << "Read of uninitialised heap memory during value resolution: address "
 				  << access.addr.get() << " width " << access.size.get()
 				  << " reader instruction "

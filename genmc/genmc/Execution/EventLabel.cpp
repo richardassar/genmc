@@ -168,6 +168,14 @@ void ReadLabel::setRf(EventLabel *rfLab)
 
 	/* and adjust the max flag */
 	this->setAddedMax(getParent()->co_max(this->getAddr()) == rfLab);
+
+	/* A CAS read takes the success or the failure ordering by the value of this rf.
+	 * Candidate rfs tried by pickRandomRf and findConsistentRf pass through here, so an
+	 * uninitialised read is resolved without a report; checkInitializedMem and the
+	 * final value resolution report it. */
+	if (auto *casLab = genmc::dyn_cast<CasReadLabel>(this))
+		casLab->setOrderingForValue(
+			getParent()->resolveAccessValue(rfLab, getAccess(), false));
 }
 
 void WriteLabel::addCo(EventLabel *predLab)

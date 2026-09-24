@@ -1691,7 +1691,8 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 #define IMPLEMENT_CAS_VISIT(__kindR, __kindW)                                                      \
 	case switchPair(EventLabel::__kindR, EventLabel::__kindW): {                               \
 		auto ret = CALL_DRIVER(handle##__kindR, currDbgInfo(ptr), currPos(),               \
-				       toGenMCOrdering(I.getSuccessOrdering()), ptr, size,         \
+				       toGenMCOrdering(I.getSuccessOrdering()),                    \
+				       toGenMCOrdering(I.getFailureOrdering()), ptr, size,         \
 				       GV_TO_SVAL(cmpVal, typ), GV_TO_SVAL(newVal, typ),           \
 				       getWriteAttr(I), nullptr, getCurrentAnnotConcretized(),     \
 				       GET_DEPS(lDeps));                                           \
@@ -1703,10 +1704,8 @@ void Interpreter::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I)
 		cmpRes = res == GV_TO_SVAL(cmpVal, typ);                                           \
 		updateDataDeps(getCurThr().id, &I, currPos());                                     \
 		updateAddrPoDeps(getCurThr().id, I.getPointerOperand());                           \
-		if (!cmpRes) {                                                                     \
-			driver->noteCasFailure(thr.id, toGenMCOrdering(I.getFailureOrdering()));   \
+		if (!cmpRes)                                                                       \
 			break;                                                                     \
-		}                                                                                  \
 		auto sDeps = makeEventDeps(getDataDeps(getCurThr().id, I.getPointerOperand()),     \
 					   getDataDeps(getCurThr().id, I.getNewValOperand()),      \
 					   getCtrlDeps(getCurThr().id), getAddrPoDeps(thr.id),     \

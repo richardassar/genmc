@@ -173,12 +173,6 @@ public:
 	/** A thread has terminated abnormally */
 	HandleResult<std::monostate> handleThreadKill(const EventDbgInfo *dbg, Event pos);
 
-	/* A compare-exchange that FAILED performed its read with the failure ordering, not the
-	 * success ordering the read label was created with. When the failure ordering carries an
-	 * acquire the success ordering lacks, the read label is upgraded and its views recomputed,
-	 * so the synchronisation C++ gives a failed acquire-CAS is in the graph. */
-	void noteCasFailure(int tid, MemOrdering failOrd);
-
 	/** This method blocks the current thread  */
 	HandleResult<std::monostate> handleAssume(const EventDbgInfo *dbg, Event pos,
 						  AssumeType type);
@@ -200,8 +194,9 @@ public:
 
 #define HANDLE_CAS_LOAD_LABEL(name)                                                                \
 	HandleResult<SVal> handle##name(const EventDbgInfo *dbg, Event pos,                        \
-					GENMC_OLD_VAL_ARG MemOrdering ord, SAddr addr, ASize size, \
-					SVal exp, SVal swap, WriteAttr wattr, EventLabel *rfLab,   \
+					GENMC_OLD_VAL_ARG MemOrdering ord, MemOrdering failOrd,    \
+					SAddr addr, ASize size, SVal exp, SVal swap,               \
+					WriteAttr wattr, EventLabel *rfLab,                        \
 					std::optional<Annotation> annot, const EventDeps &deps);
 
 #define HANDLE_LOCK_LOAD_LABEL(name)                                                               \

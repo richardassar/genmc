@@ -878,14 +878,26 @@ FAIREAD_PURE_SUBCLASS(BIncFaiRead);
 class CasReadLabel : public ReadLabel {
 
 protected:
+	CasReadLabel(EventLabelKind k, Event pos, MemOrdering ord, MemOrdering failOrd, SAddr addr,
+		     ASize size, SVal exp, SVal swap, WriteAttr wattr, EventLabel *rfLab,
+		     std::optional<Annotation> annot, const EventDeps &deps = EventDeps())
+		: ReadLabel(k, pos, ord, addr, size, rfLab, std::move(annot), deps), expected(exp),
+		  swapValue(swap), wattr(wattr), successOrd(ord), failureOrd(failOrd)
+	{}
 	CasReadLabel(EventLabelKind k, Event pos, MemOrdering ord, SAddr addr, ASize size, SVal exp,
 		     SVal swap, WriteAttr wattr, EventLabel *rfLab, std::optional<Annotation> annot,
 		     const EventDeps &deps = EventDeps())
-		: ReadLabel(k, pos, ord, addr, size, rfLab, std::move(annot), deps), expected(exp),
-		  swapValue(swap), wattr(wattr)
+		: CasReadLabel(k, pos, ord, ord, addr, size, exp, swap, wattr, rfLab,
+			       std::move(annot), deps)
 	{}
 
 public:
+	CasReadLabel(Event pos, MemOrdering ord, MemOrdering failOrd, SAddr addr, ASize size,
+		     SVal exp, SVal swap, WriteAttr wattr, EventLabel *rfLab,
+		     std::optional<Annotation> annot, const EventDeps &deps = EventDeps())
+		: CasReadLabel(CasRead, pos, ord, failOrd, addr, size, exp, swap, wattr, rfLab,
+			       std::move(annot), deps)
+	{}
 	CasReadLabel(Event pos, MemOrdering ord, SAddr addr, ASize size, SVal exp, SVal swap,
 		     WriteAttr wattr, EventLabel *rfLab, std::optional<Annotation> annot,
 		     const EventDeps &deps = EventDeps())
@@ -918,6 +930,19 @@ public:
 	/** Checks whether the write part has the specified attributes */
 	bool hasAttr(WriteAttr a) const { return !!(wattr & a); }
 
+	/** The instruction's orderings: the read and the write of a successful CAS take the
+	 * success ordering; the read of a failed CAS takes the failure ordering */
+	MemOrdering getSuccessOrdering() const { return successOrd; }
+	MemOrdering getFailureOrdering() const { return failureOrd; }
+
+	/** Sets the read's ordering to the success ordering if VAL is the expected value
+	 * and to the failure ordering otherwise. ReadLabel::setRf calls it with the value
+	 * of every rf it sets. */
+	void setOrderingForValue(const SVal &val)
+	{
+		setOrdering(val == expected ? successOrd : failureOrd);
+	}
+
 	virtual void reset() override { ReadLabel::reset(); }
 
 	DEFINE_STANDARD_MEMBERS_RANGE(CasRead)
@@ -931,12 +956,22 @@ private:
 
 	/** The attributes of the write part of the RMW */
 	WriteAttr wattr = WriteAttr::None;
+
+	/** The instruction's success and failure orderings */
+	const MemOrdering successOrd;
+	const MemOrdering failureOrd;
 };
 
 #define CASREAD_PURE_SUBCLASS(name)                                                                \
 	class name##Label : public CasReadLabel {                                                  \
                                                                                                    \
 	public:                                                                                    \
+		name##Label(Event pos, MemOrdering ord, MemOrdering failOrd, SAddr addr,           \
+			    ASize size, SVal exp, SVal swap, WriteAttr wattr, EventLabel *rfLab,   \
+			    std::optional<Annotation> annot, const EventDeps &deps = EventDeps())  \
+			: CasReadLabel(name, pos, ord, failOrd, addr, size, exp, swap, wattr,      \
+				       rfLab, std::move(annot), deps)                              \
+		{}                                                                                 \
 		name##Label(Event pos, MemOrdering ord, SAddr addr, ASize size, SVal exp,          \
 			    SVal swap, WriteAttr wattr, EventLabel *rfLab,                         \
 			    std::optional<Annotation> annot, const EventDeps &deps = EventDeps())  \
