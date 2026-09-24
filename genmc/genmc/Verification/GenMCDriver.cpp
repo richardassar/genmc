@@ -3280,7 +3280,7 @@ auto GenMCDriver::handleError(const EventDbgInfo *dbg, Event pos, std::string ms
 		return {.result = *err};
 	if (isExecutionDrivenByGraph(pos))
 		return {.result = std::monostate(), .count = 1U};
-	auto result = handleDummy(ErrorLabel::create(pos, std::move(msg)));
+	auto result = handleDummy(ErrorLabel::create(pos, msg));
 	VERIFY(std::holds_alternative<std::monostate>(result.result));
 	reportError(pos, {pos, VerificationError::VE_Safety, std::move(msg)});
 	return {.result = VerificationError::VE_Safety, .count = 1U};
