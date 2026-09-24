@@ -583,20 +583,17 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 	BasicBlock *tailBody = BasicBlock::Create(ctx, "memintr.tail.body", F, post);
 	/* Everything the loops read from `pre` is computed before its branch. */
 	Value *tailOff = (w == 1) ? nullptr : b.CreateMul(words, wC);
-	b.CreateBr(hdr);
 
 	auto emitLoop = [&](BasicBlock *h, BasicBlock *bd, BasicBlock *from, BasicBlock *to, Value *count,
-			    Type *ty, Value *base, Value *val, uint64_t width, Value *byteOffset) {
+			    Type *ty, Value *val, Value *byteOffset, bool down) {
 		IRBuilder<> lb(h);
 		auto *i = lb.CreatePHI(lenTy, 2, "memintr.i");
 		i->addIncoming(ConstantInt::get(lenTy, 0), from);
 		lb.CreateCondBr(lb.CreateICmpULT(i, count), bd, to);
 		lb.SetInsertPoint(bd);
 		Value *k = i;
-		if (backward) {
-			auto *fromTop = lb.CreateSub(lb.CreateSub(count, ConstantInt::get(lenTy, 1)), i);
-			k = lb.CreateSelect(backward, fromTop, i);
-		}
+		if (down)
+			k = lb.CreateSub(lb.CreateSub(count, ConstantInt::get(lenTy, 1)), i);
 		/* byte address = base + byteOffset + k * width, indexed in units of the type */
 		Value *dstBase = byteOffset ? lb.CreateInBoundsGEP(i8Ty, dst, {byteOffset}) : dst;
 		auto *dstElem = lb.CreateInBoundsGEP(ty, dstBase, {k}, "memintr.dst");
@@ -609,11 +606,23 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		lb.CreateStore(v, dstElem);
 		i->addIncoming(lb.CreateAdd(i, ConstantInt::get(lenTy, 1)), bd);
 		lb.CreateBr(h);
-		(void)base; (void)width;
 	};
-	/* The word loop: memmove copies from the top when overlapping, so its index runs down;
-	 * the tail follows the words either way, at offset words*w. */
-	emitLoop(hdr, body, pre, tailHdr, words, elemTy, dst, setVal, w, nullptr);
+	/* Ascending copy: the words from the bottom, then the tail bytes at offset words*w. */
+	if (backward) {
+		BasicBlock *downTailHdr = BasicBlock::Create(ctx, "memintr.down.tail.hdr", F, post);
+		BasicBlock *downTailBody = BasicBlock::Create(ctx, "memintr.down.tail.body", F, post);
+		BasicBlock *downHdr = BasicBlock::Create(ctx, "memintr.down.hdr", F, post);
+		BasicBlock *downBody = BasicBlock::Create(ctx, "memintr.down.body", F, post);
+		b.CreateCondBr(backward, downTailHdr, hdr);
+		/* Descending copy, for a destination inside the source: the tail bytes first, then
+		 * the words, each from the top. The word loop's stores cover the tail's source
+		 * bytes, so the tail is read before the words are written. */
+		emitLoop(downTailHdr, downTailBody, pre, downHdr, tail, i8Ty, setByte, tailOff, true);
+		emitLoop(downHdr, downBody, downTailHdr, post, words, elemTy, setVal, nullptr, true);
+	} else {
+		b.CreateBr(hdr);
+	}
+	emitLoop(hdr, body, pre, tailHdr, words, elemTy, setVal, nullptr, false);
 	if (w == 1) {
 		/* No tail: the word loop was the whole copy */
 		IRBuilder<> tb(tailHdr);
@@ -621,7 +630,7 @@ static auto promoteRuntimeLength(MemIntrinsic *MI, SmallVector<MemIntrinsic *, 8
 		IRBuilder<> tbb(tailBody);
 		tbb.CreateUnreachable();
 	} else {
-		emitLoop(tailHdr, tailBody, hdr, post, tail, i8Ty, dst, setByte, 1, tailOff);
+		emitLoop(tailHdr, tailBody, hdr, post, tail, i8Ty, setByte, tailOff, false);
 	}
 
 	promoted.push_back(MI);
