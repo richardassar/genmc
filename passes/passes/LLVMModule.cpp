@@ -322,7 +322,8 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		fpm.addPass(PromotePass()); // Mem2Reg
 		/* Now that closure fields and pointer slots are the allocas they held, the copies
 		 * that were opaque above are typed; what is still opaque is lowered to a loop. */
-		fpm.addPass(PromoteMemIntrinsicPass(/*lowerOpaque=*/true));
+		fpm.addPass(PromoteMemIntrinsicPass(/*lowerOpaque=*/true, conf->unroll,
+						    conf->noUnrollFuns));
 		fpm.addPass(IntrinsicLoweringPass());
 		basicOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
 	}
