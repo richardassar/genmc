@@ -761,6 +761,8 @@ static void printVerificationResults(const std::shared_ptr<const Config> &conf,
 				       : "\n*** Verification unsuccesful"));
 
 	PRINT(VerbosityLevel::Error, "Number of complete executions explored: {}", res.explored);
+	if (res.unrollCut)
+		PRINT(VerbosityLevel::Error, " ({} cut at the unroll bound)", res.unrollCut);
 	GENMC_DEBUG(if (conf->countDuplicateExecs)
 			    PRINT(VerbosityLevel::Error, " ({} duplicates)", res.duplicates););
 	if (res.boundExceeding) {
