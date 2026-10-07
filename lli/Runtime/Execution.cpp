@@ -29,6 +29,8 @@
 
 #include "genmc/Execution/Event.hpp"
 #include "Runtime/Interpreter.h"
+#include <cstdio>
+#include <cstdlib>
 #include "passes/LLVMUtils.hpp"
 #include "genmc/Support/Error.hpp"
 #include "genmc/Support/HgProgress.hpp"
@@ -1604,8 +1606,21 @@ void Interpreter::visitLoadInst(LoadInst &I)
 	}
 
 	auto retVal = std::get_if<SVal>(&val);
-	if (!retVal)
+	if (!retVal) {
+		/* HG_GENMC_ERROR_SITE=1: a load the driver reported an error on prints its
+		 * instruction, address and the call stack's functions, innermost first, so an error
+		 * report names its source without debug info. */
+		static const bool site = std::getenv("HG_GENMC_ERROR_SITE") != nullptr;
+		if (site && std::holds_alternative<VerificationError>(val)) {
+			llvm::errs() << "HG-ERROR-SITE load addr=" << (void *)ptr << " size=" << size
+				     << ": " << I << "\n";
+			for (auto it = ECStack().rbegin(); it != ECStack().rend(); ++it)
+				llvm::errs() << "HG-ERROR-SITE   in "
+					     << (it->CurFunction ? it->CurFunction->getName() : "?")
+					     << "\n";
+		}
 		return;
+	}
 
 	updateDataDeps(thr.id, &I, currPos());
 	updateAddrPoDeps(thr.id, I.getPointerOperand());
