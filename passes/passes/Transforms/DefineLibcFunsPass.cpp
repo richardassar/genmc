@@ -41,13 +41,27 @@ void replaceFunWithNop(Module &M, std::string name)
 	ReturnInst::Create(F->getContext(), res, BB);
 }
 
+/* A data symbol the C++ runtime provides and the program only declares: defined here as a zero
+ * global, since the execution engine cannot resolve an undefined global. __dso_handle is passed
+ * to __cxa_thread_atexit by every thread_local with a destructor, and the interpreter's
+ * __cxa_thread_atexit records nothing, so its value is never read. */
+void defineDataAsZero(Module &M, std::string name)
+{
+	auto *GV = M.getGlobalVariable(name);
+	if (!GV || !GV->isDeclaration())
+		return;
+	GV->setInitializer(Constant::getNullValue(GV->getValueType()));
+	GV->setLinkage(GlobalValue::InternalLinkage);
+}
+
 auto DefineLibcFunsPass::run(Module &M, ModuleAnalysisManager &AM) -> PreservedAnalyses
 {
+	defineDataAsZero(M, "__dso_handle");
 	replaceFunWithNop(M, "fclose");
 	replaceFunWithNop(M, "fopen");
 	replaceFunWithNop(M, "fflush");
 	replaceFunWithNop(M, "fprintf");
-	return PreservedAnalyses::all();
+	return PreservedAnalyses::none();
 }
 
 //-----------------------------------------------------------------------------
