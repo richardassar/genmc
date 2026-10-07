@@ -394,6 +394,15 @@ auto GenMCDriver::handleExecutionEnd() -> std::optional<VerificationError>
 	if (getConf()->printExecGraphs)
 		printGraph(g, dbgInfo_);
 
+	/* A thread ended by the loop-unroll bound did not run to its end: whatever the harness
+	 * asserts after that point was not checked in this execution. */
+	for (auto i = 0U; i < g.getNumThreads(); i++) {
+		if (!g.isThreadEmpty(i) && genmc::isa<ThreadKillLabel>(g.getLastThreadLabel(i))) {
+			++result.unrollCut;
+			break;
+		}
+	}
+
 	GENMC_DEBUG(if (getConf()->boundsHistogram && inVerificationMode()) trackExecutionBound(););
 
 	++result.explored;

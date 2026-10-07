@@ -17,6 +17,8 @@ struct VerificationResult {
 	unsigned explored{};			 /**< Number of complete executions explored */
 	unsigned exploredBlocked{};		 /**< Number of blocked executions explored */
 	unsigned boundExceeding{};	  /**< Number of bound-exceeding executions explored */
+	unsigned unrollCut{};		  /**< Of the complete ones, those with a thread ended
+					     at the --unroll bound (a KILL label) */
 	long double estimationMean{};	  /**< The mean of estimations */
 	long double estimationVariance{}; /**< The (biased) variance of the estimations */
 #ifdef ENABLE_GENMC_DEBUG
@@ -42,6 +44,7 @@ struct VerificationResult {
 		explored += other.explored;
 		exploredBlocked += other.exploredBlocked;
 		boundExceeding += other.boundExceeding;
+		unrollCut += other.unrollCut;
 		estimationMean += other.estimationMean;
 		estimationVariance += other.estimationVariance;
 #ifdef ENABLE_GENMC_DEBUG
