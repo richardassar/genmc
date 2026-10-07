@@ -64,10 +64,10 @@ struct State {
 	std::atomic<uint64_t> starts{0};
 	static constexpr size_t kThreads = 64;
 	std::atomic<uint64_t> threadInsts[kThreads] = {};
-	// The instruction the interpreter is executing, and the interpreter's own account of the
-	// executing thread's call stack (set by the interpreter; empty until it runs).
+	// The instruction an interpreter last executed, for the heartbeat and the at-exit report;
+	// with --nthreads above 1 it is whichever explorer stored last. Attribution reads the
+	// executing explorer's own record (explorer()).
 	std::atomic<const llvm::Instruction *> curInst{nullptr};
-	std::function<std::string()> stackDump;
 	// Choice attribution (estimation mode). The state-space estimate of an execution is the
 	// product, over its reads and writes, of the number of alternatives each one has; every
 	// alternative set larger than one is booked here against the site of the instruction
@@ -75,8 +75,6 @@ struct State {
 	// the estimate comes from. A store that becomes a new alternative for earlier loads is
 	// booked at the store's site with the log2 growth it causes.
 	std::map<std::string, std::pair<uint64_t, double>> choices; // site -> (count, sum log2); mtx
-	uint64_t execChoicePoints{0};                                // this execution; mtx
-	double execChoiceLog2{0};                                    // this execution; mtx
 	uint64_t log2Samples{0};                                     // Welford over executions; mtx
 	long double log2Mean{0}, log2M2{0};                          // of log2(sample); mtx
 	long double residualSum{0};                                  // |log2 sample - booked|; mtx
@@ -90,6 +88,21 @@ inline State &state()
 {
 	static State s;
 	return s;
+}
+
+/* One explorer's own record: each explorer (--nthreads) runs its own interpreter on its own
+ * thread, so what it is executing and its execution's choice totals are per thread. */
+struct Explorer {
+	const llvm::Instruction *curInst = nullptr;
+	std::function<std::string()> stackDump; // the interpreter's call stack, innermost first
+	uint64_t execChoicePoints = 0;
+	double execChoiceLog2 = 0;
+};
+
+inline Explorer &explorer()
+{
+	thread_local Explorer e;
+	return e;
 }
 
 inline bool enabled() { return std::getenv("HG_GENMC_PROGRESS") != nullptr; }
@@ -117,14 +130,14 @@ inline void sample(const std::string &site)
 inline void choice(size_t alternatives)
 {
 	auto &s = state();
-	const auto *I = s.curInst.load(std::memory_order_relaxed);
+	auto &x = explorer();
 	const double w = std::log2(static_cast<double>(alternatives));
+	++x.execChoicePoints;
+	x.execChoiceLog2 += w;
 	std::lock_guard<std::mutex> g(s.mtx);
-	auto &e = s.choices[siteName(I)];
+	auto &e = s.choices[siteName(x.curInst)];
 	++e.first;
 	e.second += w;
-	++s.execChoicePoints;
-	s.execChoiceLog2 += w;
 }
 
 inline void choiceRevisit(double log2Growth)
@@ -132,29 +145,30 @@ inline void choiceRevisit(double log2Growth)
 	if (log2Growth <= 0)
 		return;
 	auto &s = state();
-	const auto *I = s.curInst.load(std::memory_order_relaxed);
+	auto &x = explorer();
+	++x.execChoicePoints;
+	x.execChoiceLog2 += log2Growth;
 	std::lock_guard<std::mutex> g(s.mtx);
-	auto &e = s.choices[siteName(I) + " (store revisits earlier loads)"];
+	auto &e = s.choices[siteName(x.curInst) + " (store revisits earlier loads)"];
 	++e.first;
 	e.second += log2Growth;
-	++s.execChoicePoints;
-	s.execChoiceLog2 += log2Growth;
 }
 
 /* One estimation sample ended: SAMPLE is the product of the alternative counts. */
 inline void endEstimationSample(long double sample)
 {
 	auto &s = state();
+	auto &x = explorer();
 	std::lock_guard<std::mutex> g(s.mtx);
 	const long double l = std::log2(sample);
 	++s.log2Samples;
 	const long double d = l - s.log2Mean;
 	s.log2Mean += d / s.log2Samples;
 	s.log2M2 += d * (l - s.log2Mean);
-	s.residualSum += std::fabs(l - (long double)s.execChoiceLog2);
-	s.choicePointsSum += s.execChoicePoints;
-	s.execChoicePoints = 0;
-	s.execChoiceLog2 = 0;
+	s.residualSum += std::fabs(l - (long double)x.execChoiceLog2);
+	s.choicePointsSum += x.execChoicePoints;
+	x.execChoicePoints = 0;
+	x.execChoiceLog2 = 0;
 }
 
 inline std::string choiceTable(size_t n)

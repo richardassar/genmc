@@ -37,10 +37,10 @@
 			std::cerr << "Read of uninitialised heap memory during value resolution: address "
 				  << access.addr.get() << " width " << access.size.get()
 				  << " reader instruction "
-				  << hgprog::siteName(hgprog::state().curInst.load(std::memory_order_relaxed))
-				  << "\n";
-			if (hgprog::state().stackDump)
-				std::cerr << "  reader's frames, innermost first:\n" << hgprog::state().stackDump();
+				  << hgprog::siteName(hgprog::explorer().curInst) << "\n";
+			if (hgprog::explorer().stackDump)
+				std::cerr << "  reader's frames, innermost first:\n"
+					  << hgprog::explorer().stackDump();
 			/* Every write in the graph within 32 bytes of the address, so the object the
 			 * reader holds can be told from one that was never written there. */
 			std::cerr << "  writes within 32 bytes of the address:\n";

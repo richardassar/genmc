@@ -3681,7 +3681,7 @@ void Interpreter::run()
 	hgRegisterLastInstructionReport();
 	/* The executing thread's frames, innermost first, for the reports raised below the
 	 * interpreter: each frame is named by the instruction it is at. */
-	hgprog::state().stackDump = [this]() {
+	hgprog::explorer().stackDump = [this]() {
 		std::string out;
 		const auto &stack = ECStack();
 		for (size_t i = stack.size(); i-- > 0;) {
@@ -3697,6 +3697,7 @@ void Interpreter::run()
 		scheduleThread(std::get<int>(tid));
 		llvm::ExecutionContext &SF = ECStack().back();
 		llvm::Instruction &I = *SF.CurInst++;
+		hgprog::explorer().curInst = &I;
 		hgprog::state().curInst.store(&I, std::memory_order_relaxed);
 		visit(I);
 		const auto instsSoFar =
