@@ -24,4 +24,7 @@ const std::unordered_map<std::string, InternalFunctions> internalFunNames = {
 	{"_Znam", InternalFunctions::Malloc},
 	{"_ZdlPv", InternalFunctions::Free},
 	{"_ZdaPv", InternalFunctions::Free},
+	/* Sized delete, which clang emits by default since LLVM 19; the size argument is unused */
+	{"_ZdlPvm", InternalFunctions::Free},
+	{"_ZdaPvm", InternalFunctions::Free},
 };
