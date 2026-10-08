@@ -381,7 +381,9 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 				LoopUnrollPass(*conf->unroll, conf->noUnrollFuns))));
 	preserved.intersect(loopOptsMGR.run(mod, mam));
 
-	/* Run annotation passes last so that the module is stable */
+	/* Run annotation passes last so that the module is stable. They get a pass manager of
+	 * their own: added to basicOptsMGR, they re-ran every basic pass over the whole module. */
+	llvm::ModulePassManager annotOptsMGR;
 	{
 		llvm::FunctionPassManager fpm;
 		if (conf->assumePropagation)
@@ -391,10 +393,10 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 		if (conf->loadAnnot)
 			fpm.addPass(LoadAnnotationPass(PI.annotInfo));
 		fpm.addPass(StrengthenCASPass());
-		basicOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
+		annotOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
 	}
 
-	preserved.intersect(basicOptsMGR.run(mod, mam));
+	preserved.intersect(annotOptsMGR.run(mod, mam));
 
 	initializeModuleInfo(MI, PI, mod);
 
