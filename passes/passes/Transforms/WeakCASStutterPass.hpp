@@ -19,26 +19,31 @@
 using namespace llvm;
 
 /**
- * Makes a weak CAS strong when its spurious failure is a stutter: the failure edge
- * returns to the CAS with every loop-carried value unchanged and with no memory access
- * on the way other than stores that write the same value to the same address again.
+ * Makes a weak CAS strong when its spurious failure adds no behaviour. The checker models a
+ * spurious failure as a failed read of the write the CAS would have succeeded on, so the CAS
+ * returns its expected value. Two shapes of retry loop qualify:
  *
- * The checker models a spurious failure as a failed read of the write the CAS would
- * have succeeded on, so the value it returns equals the expected value. On such a cycle
- * the thread then re-executes the same CAS from the same local state, and the
- * execution with the spurious failure differs from the one without it only by one read
- * (and the repeated stores). Dropping a read removes happens-before edges and never
- * makes a consistent execution inconsistent, so every outcome reachable through the
- * spurious failure is reachable without it. Run before unrolling, which breaks the
- * cycle into copies.
+ *  - Drop the iteration. From the loop header to the header again the iteration holds reads
+ *    and fences only (loads before the CAS; nothing but pure code after it), the failure path
+ *    stays in the loop, and every header phi has the same value after the iteration as before.
+ *    Deleting the iteration's events leaves a consistent execution -- deleting reads and fences
+ *    only removes constraints -- in which the thread starts the next iteration in the same state
+ *    and every remaining read reads the same write.
  *
- * A weak CAS whose failure leads anywhere else -- out of the loop, into a load, a call,
- * an RMW, a store of a changed value, or a loop-carried value that changes (an attempt
- * counter, a "contended" flag) -- stays weak and its spurious failures are explored.
+ *  - Repeat the attempt. The failure path returns to the CAS with every loop-carried value and
+ *    branch condition unchanged, and the only memory accesses on the cycle are stores of
+ *    unchanged values to unchanged addresses that the previous arrival also executed (a
+ *    Treiber push storing the link before the CAS). The execution with the spurious failure
+ *    differs from the one without it by one read and the repeated stores. Remaining
+ *    assumption: no other thread writes a stored address between the two copies; for a
+ *    non-atomic store such a writer is a data race, which the checker reports through the copy
+ *    that is kept.
  *
- * Remaining assumption for the repeated stores: no other thread writes the stored
- * address between the two copies. For a non-atomic store such a writer is a data race,
- * which the checker reports through the copy that is kept.
+ * Every other weak CAS stays weak and its spurious failures are explored: one not in a loop,
+ * one whose failure leaves the loop, loads after the CAS, calls, writes a changed value, or
+ * changes a loop-carried value such as an attempt counter. Runs before SpinAssume and unrolling,
+ * which rewrite the cycle. HG_GENMC_STUTTER_REPORT=1 prints the decision per CAS (=2 also
+ * prints the function of a CAS kept weak); HG_GENMC_NO_STUTTER=1 disables the pass.
  */
 class WeakCASStutterPass : public PassInfoMixin<WeakCASStutterPass> {
 public:
