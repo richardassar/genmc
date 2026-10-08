@@ -89,6 +89,25 @@
 #include <vector>
 namespace fs = std::filesystem;
 
+/* Turns into declarations the internal functions nothing references any more: after full
+ * inlining every inlined callee is such a function, and the passes after the inliner would
+ * transform it a second time. Bodies are deleted rather than the functions erased: erasing them
+ * (GlobalDCEPass) left a pointer an earlier pass recorded dangling, and the checker crashed on a
+ * three-thread Treiber push. */
+struct DropUnreferencedBodiesPass : llvm::PassInfoMixin<DropUnreferencedBodiesPass> {
+	auto run(llvm::Module &M, llvm::ModuleAnalysisManager & /*MAM*/) -> llvm::PreservedAnalyses
+	{
+		auto changed = false;
+		for (auto &F : M) {
+			if (F.isDeclaration() || !F.hasLocalLinkage() || !F.use_empty())
+				continue;
+			F.deleteBody();
+			changed = true;
+		}
+		return changed ? llvm::PreservedAnalyses::none() : llvm::PreservedAnalyses::all();
+	}
+};
+
 namespace LLVMModule {
 
 auto parseLLVMModule(const std::string &filename, const std::unique_ptr<llvm::LLVMContext> &ctx)
@@ -321,8 +340,12 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 	basicOptsMGR.addPass(MDataCollectionPass(PI));
 	if (conf->rust)
 		basicOptsMGR.addPass(RustPrepPass());
-	if (conf->inlineFunctions)
+	if (conf->inlineFunctions) {
 		basicOptsMGR.addPass(FunctionInlinerPass());
+		/* An internal function every caller of which was inlined is now referenced by
+		 * nothing; deleting it keeps the passes below from transforming a second copy. */
+		basicOptsMGR.addPass(DropUnreferencedBodiesPass());
+	}
 	{
 		llvm::FunctionPassManager fpm;
 		/* Run after the inliner because it might generate new memcpys. Typed operands only
