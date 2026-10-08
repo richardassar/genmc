@@ -49,6 +49,7 @@
 #include "passes/Transforms/RustPrepPass.hpp"
 #include "passes/Transforms/SpinAssumePass.hpp"
 #include "passes/Transforms/StrengthenCASPass.hpp"
+#include "passes/Transforms/WeakCASStutterPass.hpp"
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
@@ -367,6 +368,9 @@ auto transformLLVMModule(llvm::Module &mod, ModuleInfo &MI, const LLIConfig *con
 			fpm.addPass(CodeCondenserPass());
 		if (conf->loopJumpThreading)
 			fpm.addPass(createFunctionToLoopPassAdaptor(LoopJumpThreadingPass()));
+		/* Before SpinAssume and unrolling, which both rewrite the retry cycle. */
+		if (!std::getenv("HG_GENMC_NO_STUTTER"))
+			fpm.addPass(WeakCASStutterPass());
 		loopOptsMGR.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
 	}
 	if (conf->spinAssume)
