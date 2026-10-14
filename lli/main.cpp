@@ -105,6 +105,12 @@ static llvm::cl::opt<int>
 	clBound("bound", llvm::cl::cat(clGeneral), llvm::cl::init(-1), llvm::cl::value_desc("N"),
 		llvm::cl::desc("Do not explore executions exceeding given bound"));
 
+static llvm::cl::opt<int> clWeakCasSpuriousBound(
+	"weak-cas-spurious-bound", llvm::cl::cat(clGeneral), llvm::cl::init(-1),
+	llvm::cl::value_desc("N"),
+	llvm::cl::desc("Explore at most N spurious failures in a row of one thread's weak CAS on "
+		       "one address (N >= 1; unbounded when not given)"));
+
 static llvm::cl::opt<BoundType>
 	clBoundType("bound-type", llvm::cl::cat(clGeneral), llvm::cl::init(BoundType::round),
 		    llvm::cl::desc("Choose type for -bound:"),
@@ -426,6 +432,9 @@ static void saveConfigOptions(Config &conf, LLIConfig &lliConfig)
 
 	conf.bound = clBound >= 0 ? std::optional(clBound.getValue()) : std::nullopt;
 	conf.boundType = clBoundType.getNumOccurrences() > 0 ? clBoundType : BoundType::none;
+	if (clWeakCasSpuriousBound.getNumOccurrences() > 0)
+		conf.weakCasSpuriousBound = static_cast<unsigned int>(
+			std::max(0, clWeakCasSpuriousBound.getValue()));
 	conf.LAPOR = clLAPOR;
 	conf.symmetryReduction = !clDisableSymmetryReduction;
 	conf.helper = !clDisableHelper;
@@ -788,6 +797,9 @@ static void printVerificationResults(const std::shared_ptr<const Config> &conf,
 	PRINT(VerbosityLevel::Error, "Number of complete executions explored: {}", res.explored);
 	if (res.unrollCut)
 		PRINT(VerbosityLevel::Error, " ({} cut at the unroll bound)", res.unrollCut);
+	if (conf->weakCasSpuriousBound)
+		PRINT(VerbosityLevel::Error, "\nWeak CAS spurious failures past the bound of {}: {}",
+		      *conf->weakCasSpuriousBound, res.spuriousCut);
 	GENMC_DEBUG(if (conf->countDuplicateExecs)
 			    PRINT(VerbosityLevel::Error, " ({} duplicates)", res.duplicates););
 	if (res.boundExceeding) {

@@ -38,6 +38,7 @@ struct Config {
 	bool estimate{};
 	bool isDepTrackingModel{};
 	std::optional<unsigned int> bound;
+	std::optional<unsigned int> weakCasSpuriousBound;
 	BoundType boundType{};
 	bool LAPOR{};
 	bool symmetryReduction{};

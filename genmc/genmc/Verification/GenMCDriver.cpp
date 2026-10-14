@@ -790,6 +790,26 @@ void GenMCDriver::maybePushWeakCasFailure(const CasReadLabel *cLab)
 	 * callers must have already established success. */
 	if (!cLab->isWeak() || cLab->failsSpuriously() || !cLab->getRf())
 		return;
+	/* --weak-cas-spurious-bound=N: a thread's CAS on one address fails spuriously at most N
+	 * times in a row. Each option this drops is counted in VerificationResult::spuriousCut;
+	 * a run whose count is 0 explored every spurious failure. */
+	if (const auto bound = getConf()->weakCasSpuriousBound) {
+		const auto &g = getExec().getGraph();
+		auto run = 0U;
+		for (auto i = cLab->getPos().index - 1; i > 0 && run < *bound; --i) {
+			const auto *prev = genmc::dyn_cast<CasReadLabel>(
+				g.getEventLabel(Event(cLab->getThread(), i)));
+			if (!prev || prev->getAddr() != cLab->getAddr())
+				continue;
+			if (!prev->failsSpuriously())
+				break;
+			++run;
+		}
+		if (run >= *bound) {
+			++result.spuriousCut;
+			return;
+		}
+	}
 	getExec().getWorkqueue().add(
 		std::make_unique<WeakCasFailureRevisit>(cLab->getPos(), cLab->getRf()->getPos()));
 }

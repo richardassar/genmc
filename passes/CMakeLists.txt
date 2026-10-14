@@ -28,8 +28,6 @@ set(PASSES_SOURCES
   passes/Transforms/PropagateAssumesPass.cpp
   passes/Transforms/RustPrepPass.cpp
   passes/Transforms/SpinAssumePass.cpp
-  passes/Transforms/StrengthenCASPass.cpp
-  passes/Transforms/WeakCASStutterPass.cpp
   passes/Transforms/BarrierResultCheckerPass.cpp
 )
 
