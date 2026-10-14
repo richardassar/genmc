@@ -19,7 +19,9 @@
 #include <llvm/Analysis/MemoryBuiltins.h>
 #include <llvm/CodeGen/IntrinsicLowering.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/ADT/APInt.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
@@ -150,6 +152,36 @@ static auto runOnBasicBlock(BasicBlock &bb, IntrinsicLowering *IL) -> bool
 								  I->getModule()->getDataLayout(),
 								  nullptr, /* must succeed */ true);
 			I->replaceAllUsesWith(objSize);
+			I->eraseFromParent();
+			modified = true;
+			break;
+		}
+		/* fmuladd may be fused or not (LangRef); it is lowered to a multiply and an add,
+		 * which IntrinsicLowering does not provide. */
+		case llvm::Intrinsic::fmuladd: {
+			IRBuilder<> builder(I);
+			auto *mul = builder.CreateFMul(I->getArgOperand(0), I->getArgOperand(1));
+			auto *add = builder.CreateFAdd(mul, I->getArgOperand(2));
+			I->replaceAllUsesWith(add);
+			I->eraseFromParent();
+			modified = true;
+			break;
+		}
+		/* fabs on a scalar clears the sign bit; IntrinsicLowering does not provide it. */
+		case llvm::Intrinsic::fabs: {
+			auto *ty = I->getType();
+			if (!ty->isFloatingPointTy()) {
+				IL->LowerIntrinsicCall(I);
+				modified = true;
+				break;
+			}
+			IRBuilder<> builder(I);
+			auto bits = ty->getPrimitiveSizeInBits().getFixedValue();
+			auto *ity = IntegerType::get(M.getContext(), bits);
+			auto *asInt = builder.CreateBitCast(I->getArgOperand(0), ity);
+			auto *cleared =
+				builder.CreateAnd(asInt, ConstantInt::get(ity, APInt::getSignedMaxValue(bits)));
+			I->replaceAllUsesWith(builder.CreateBitCast(cleared, ty));
 			I->eraseFromParent();
 			modified = true;
 			break;
