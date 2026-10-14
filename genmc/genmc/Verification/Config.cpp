@@ -55,6 +55,9 @@ auto Config::validate(std::vector<std::string> &warnings) -> ValidationStatus
 	if (weakCasSpuriousBound.has_value() && *weakCasSpuriousBound == 0)
 		errors.emplace_back("--weak-cas-spurious-bound must be at least 1: a bound of 0 "
 				    "makes every weak CAS strong.");
+	if (weakCasSpuriousTotal.has_value() && *weakCasSpuriousTotal == 0)
+		errors.emplace_back("--weak-cas-spurious-total must be at least 1: a bound of 0 "
+				    "makes every weak CAS strong.");
 	if (!emitNALabels && instructionCaching)
 		errors.emplace_back("Instruction caching implies NA-label emission");
 

@@ -810,6 +810,25 @@ void GenMCDriver::maybePushWeakCasFailure(const CasReadLabel *cLab)
 			return;
 		}
 	}
+	/* --weak-cas-spurious-total=M: at most M spurious failures in one execution, over all
+	 * threads, counted among the events added before this CAS (the graph its revisit keeps). */
+	if (const auto total = getConf()->weakCasSpuriousTotal) {
+		const auto &g = getExec().getGraph();
+		auto failed = 0U;
+		for (auto t = 0U; t < g.getNumThreads() && failed < *total; ++t) {
+			for (auto i = 1; i < g.getThreadSize(t) && failed < *total; ++i) {
+				const auto *prev = genmc::dyn_cast<CasReadLabel>(
+					g.getEventLabel(Event(t, i)));
+				if (prev && prev->failsSpuriously() &&
+				    prev->getStamp() < cLab->getStamp())
+					++failed;
+			}
+		}
+		if (failed >= *total) {
+			++result.spuriousCut;
+			return;
+		}
+	}
 	getExec().getWorkqueue().add(
 		std::make_unique<WeakCasFailureRevisit>(cLab->getPos(), cLab->getRf()->getPos()));
 }
