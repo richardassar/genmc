@@ -83,6 +83,18 @@ auto InstAnnotator::generateOperandExpr(Module *mod, Value *op) -> InstAnnotator
 			VERIFY(isa<ConstantPointerNull>(constant)); /* will fire for GlobalValue */
 			return ConcreteExpr<Value *>::create(bitWidth, SVal(0));
 		}
+		/* A floating-point constant is its bit pattern; the annotator handles no
+		 * floating-point operation, so the value reaches an expression only as a
+		 * PHI operand or through a bitcast. */
+		if (typ->isFloatingPointTy() && typ->getPrimitiveSizeInBits() <= 64) {
+			auto bitWidth = typ->getPrimitiveSizeInBits().getFixedValue();
+			if (isa<UndefValue>(constant))
+				return ConcreteExpr<Value *>::create(bitWidth, concUndefVal);
+			auto *cf = dyn_cast<ConstantFP>(constant);
+			VERIFY(cf);
+			return ConcreteExpr<Value *>::create(
+				bitWidth, SVal(cf->getValueAPF().bitcastToAPInt().getZExtValue()));
+		}
 		ERROR("Only integer and null constants currently allowed in assume() "
 		      "expressions.");
 	}
