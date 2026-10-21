@@ -170,7 +170,10 @@ void Interpreter::collectStaticAddresses()
 
 	for (auto &v : GLOBALS(*M)) {
 		char *ptr = static_cast<char *>(GVTOP(getConstantValue(&v)));
-		const uint64_t typeSize = getDataLayout().getTypeAllocSize(v.getValueType());
+		/* A zero-size global (an external array of unknown bound, such as a vtable libstdc++
+		 * takes the address of) gets one byte, so it has an address of its own. */
+		const uint64_t typeSize =
+			std::max<uint64_t>(1, getDataLayout().getTypeAllocSize(v.getValueType()));
 
 		/* Record whether this is a thread local variable or not. A thread-local is held
 		 * as one value per byte of its storage; an aggregate initializer is walked to its
