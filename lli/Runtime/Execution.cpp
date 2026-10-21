@@ -1303,6 +1303,33 @@ void Interpreter::visitReturnInst(ReturnInst &I)
 /* freeze yields its operand: the interpreter's values are never poison, so the instruction
  * that LLVM's own loop passes insert when they hoist a condition (a loop whose bound is a
  * runtime value, once the mem-intrinsic promotion emits one) is the identity here. */
+/* fneg, the one unary operator: the sign of a float or double, or of each element of a vector
+ * of them, is flipped. */
+void Interpreter::visitUnaryOperator(UnaryOperator &I)
+{
+	ExecutionContext &SF = ECStack().back();
+	Type *Ty = I.getOperand(0)->getType();
+	GenericValue Src = getOperandValue(I.getOperand(0), SF);
+	GenericValue R = Src;
+	updateDataDeps(getCurThr().id, &I, I.getOperand(0));
+	ERROR_ON(I.getOpcode() != Instruction::FNeg, "Unhandled unary operator");
+	auto neg = [](GenericValue &v, Type *t) {
+		if (t->isFloatTy())
+			v.FloatVal = -v.FloatVal;
+		else if (t->isDoubleTy())
+			v.DoubleVal = -v.DoubleVal;
+		else
+			ERROR("Unhandled type for FNeg instruction");
+	};
+	if (auto *VT = dyn_cast<VectorType>(Ty)) {
+		for (auto &e : R.AggregateVal)
+			neg(e, VT->getElementType());
+	} else {
+		neg(R, Ty);
+	}
+	SetValue(&I, R, SF);
+}
+
 void Interpreter::visitFreezeInst(FreezeInst &I)
 {
 	ExecutionContext &SF = ECStack().back();
