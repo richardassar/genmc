@@ -197,7 +197,10 @@ void Interpreter::collectStaticAddresses()
 		/* ... and use that in the EE instead. Make sure to re-initialize it too;
 		 * it might contain the address of another global */
 		updateGlobalMapping(&v, (void *)addr.get());
-		toReinitialize.push_back(std::make_pair(&v, ptr));
+		/* A declaration (an external global, resolved to the symbol in this process) has no
+		 * initializer, and its host storage is not the program's to write. */
+		if (v.hasInitializer())
+			toReinitialize.push_back(std::make_pair(&v, ptr));
 
 		/* Update naming information */
 		staticNames[addr] = &v;
