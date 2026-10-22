@@ -117,6 +117,12 @@ static llvm::cl::opt<int> clWeakCasSpuriousTotal(
 	llvm::cl::desc("Explore at most M spurious failures of weak CASes in one execution, over "
 		       "all threads (M >= 1; unbounded when not given)"));
 
+static llvm::cl::opt<bool> clWeakCasSpuriousConcurrentOnly(
+	"weak-cas-spurious-concurrent-only", llvm::cl::cat(clGeneral),
+	llvm::cl::desc("Explore no spurious failure of a weak CAS executed while the program has one "
+		       "thread, before its first thread is created (counted with the other dropped "
+		       "failures)"));
+
 static llvm::cl::opt<BoundType>
 	clBoundType("bound-type", llvm::cl::cat(clGeneral), llvm::cl::init(BoundType::round),
 		    llvm::cl::desc("Choose type for -bound:"),
@@ -444,6 +450,7 @@ static void saveConfigOptions(Config &conf, LLIConfig &lliConfig)
 	if (clWeakCasSpuriousTotal.getNumOccurrences() > 0)
 		conf.weakCasSpuriousTotal = static_cast<unsigned int>(
 			std::max(0, clWeakCasSpuriousTotal.getValue()));
+	conf.weakCasSpuriousConcurrentOnly = clWeakCasSpuriousConcurrentOnly;
 	conf.LAPOR = clLAPOR;
 	conf.symmetryReduction = !clDisableSymmetryReduction;
 	conf.helper = !clDisableHelper;
@@ -806,6 +813,10 @@ static void printVerificationResults(const std::shared_ptr<const Config> &conf,
 	PRINT(VerbosityLevel::Error, "Number of complete executions explored: {}", res.explored);
 	if (res.unrollCut)
 		PRINT(VerbosityLevel::Error, " ({} cut at the unroll bound)", res.unrollCut);
+	if (conf->weakCasSpuriousConcurrentOnly && !conf->weakCasSpuriousBound &&
+	    !conf->weakCasSpuriousTotal)
+		PRINT(VerbosityLevel::Error,
+		      "\nWeak CAS spurious failures before the first thread: {}", res.spuriousCut);
 	if (conf->weakCasSpuriousBound && !conf->weakCasSpuriousTotal)
 		PRINT(VerbosityLevel::Error, "\nWeak CAS spurious failures past the bound of {}: {}",
 		      *conf->weakCasSpuriousBound, res.spuriousCut);

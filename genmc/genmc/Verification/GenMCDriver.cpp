@@ -790,6 +790,12 @@ void GenMCDriver::maybePushWeakCasFailure(const CasReadLabel *cLab)
 	 * callers must have already established success. */
 	if (!cLab->isWeak() || cLab->failsSpuriously() || !cLab->getRf())
 		return;
+	/* --weak-cas-spurious-concurrent-only: a CAS the program executes while it has one thread
+	 * (before its first thread is created) gets no spurious-failure option. */
+	if (getConf()->weakCasSpuriousConcurrentOnly && getExec().getGraph().getNumThreads() == 1) {
+		++result.spuriousCut;
+		return;
+	}
 	/* --weak-cas-spurious-bound=N: a thread's CAS on one address fails spuriously at most N
 	 * times in a row. Each option this drops is counted in VerificationResult::spuriousCut;
 	 * a run whose count is 0 explored every spurious failure. */

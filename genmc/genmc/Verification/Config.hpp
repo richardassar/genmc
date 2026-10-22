@@ -40,6 +40,7 @@ struct Config {
 	std::optional<unsigned int> bound;
 	std::optional<unsigned int> weakCasSpuriousBound;
 	std::optional<unsigned int> weakCasSpuriousTotal;
+	bool weakCasSpuriousConcurrentOnly = false;
 	BoundType boundType{};
 	bool LAPOR{};
 	bool symmetryReduction{};
