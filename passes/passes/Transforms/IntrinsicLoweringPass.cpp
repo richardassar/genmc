@@ -167,6 +167,25 @@ static auto runOnBasicBlock(BasicBlock &bb, IntrinsicLowering *IL) -> bool
 			modified = true;
 			break;
 		}
+		/* fma rounds once, which no multiply-then-add reproduces; a scalar fma becomes a call to
+		 * the C library's fma/fmaf, which the interpreter reports as an unknown external function
+		 * if an execution reaches it and the module defines neither. */
+		case llvm::Intrinsic::fma: {
+			auto *ty = I->getType();
+			if (!ty->isDoubleTy() && !ty->isFloatTy()) {
+				IL->LowerIntrinsicCall(I);
+				modified = true;
+				break;
+			}
+			auto FC = M.getOrInsertFunction(ty->isDoubleTy() ? "fma" : "fmaf", ty, ty, ty, ty);
+			IRBuilder<> builder(I);
+			auto *call = builder.CreateCall(FC, {I->getArgOperand(0), I->getArgOperand(1),
+							     I->getArgOperand(2)});
+			I->replaceAllUsesWith(call);
+			I->eraseFromParent();
+			modified = true;
+			break;
+		}
 		/* fabs on a scalar clears the sign bit; IntrinsicLowering does not provide it. */
 		case llvm::Intrinsic::fabs: {
 			auto *ty = I->getType();
