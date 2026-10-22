@@ -794,6 +794,14 @@ void GenMCDriver::maybePushWeakCasFailure(const CasReadLabel *cLab)
 	 * (before its first thread is created) gets no spurious-failure option. */
 	if (getConf()->weakCasSpuriousConcurrentOnly && getExec().getGraph().getNumThreads() == 1) {
 		++result.spuriousCut;
+		/* HG_GENMC_SETUP_CAS_SITES: name each site this exempts, once, so a harness can list
+		 * the CASes its bound leaves strong. */
+		if (std::getenv("HG_GENMC_SETUP_CAS_SITES")) {
+			static std::set<std::string> seen;
+			auto site = hgprog::siteName(hgprog::explorer().curInst);
+			if (seen.insert(site).second)
+				std::cerr << "HG-SETUP-CAS " << site << "\n";
+		}
 		return;
 	}
 	/* --weak-cas-spurious-bound=N: a thread's CAS on one address fails spuriously at most N
