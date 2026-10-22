@@ -85,6 +85,37 @@ static constexpr uint64_t BYTE_MASK = 0xFF;
 					     "PromoteMemIntrinsicPass.\n";
 			ERROR("Read of uninitialised heap memory during value resolution\n");
 		}
+		/* A static location read from the initializer while a write in the graph overlaps it
+		 * at another address or width: the value would be the initializer's, not the
+		 * write's. Non-atomic labels resolve a read against writes to its exact address and
+		 * width, so a mixed-size access is reported, where the initializer was returned. */
+		if (haveNAs_ && !access.addr.isDynamic() && !pruned_) {
+			const WriteLabel *overlap = nullptr;
+			for (auto d = 1U; d < 16U && !overlap; ++d) {
+				auto it = coherence.find(access.addr - ASize(d));
+				if (it == coherence.end())
+					continue;
+				for (const auto &w : it->second)
+					if (w.getSize().get() > d) { overlap = &w; break; }
+			}
+			for (auto d = 0U; d < access.size.get() && !overlap; ++d) {
+				auto it = coherence.find(access.addr + ASize(d));
+				if (it == coherence.end())
+					continue;
+				for (const auto &w : it->second)
+					if (d != 0 || w.getSize() != access.size) { overlap = &w; break; }
+			}
+			if (overlap) {
+				std::cerr << "Mixed-size access to static memory: a read of address "
+					  << access.addr.get() << " width " << access.size.get()
+					  << " overlaps the write (" << overlap->getPos().thread << ", "
+					  << overlap->getPos().index << ") at address "
+					  << overlap->getAddr().get() << " width " << overlap->getSize().get()
+					  << " reader instruction "
+					  << hgprog::siteName(hgprog::explorer().curInst) << "\n";
+				ERROR("Mixed-size access to static memory\n");
+			}
+		}
 		auto val = (access.addr.isDynamic() && !initVals_.contains(access.addr))
 				   ? SVal(0)
 				   : getInitVal(access);
